@@ -1,0 +1,66 @@
+{
+  "name": "discord-management-mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Safe-by-default Discord management MCP server with JSON backups, restore planning, and guarded mutations.",
+  "license": "MIT",
+  "author": {
+    "name": "Michael Gasperini",
+    "url": "https://mikesoft.it"
+  },
+  "homepage": "https://github.com/TheStreamCode/discord-management-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheStreamCode/discord-management-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TheStreamCode/discord-management-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "discord",
+    "discord-management",
+    "discord-bot",
+    "backup",
+    "rollback"
+  ],
+  "bin": {
+    "discord-management-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "examples",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "discord-management-mcp.png",
+    ".env.example"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "clean": "node -e \"import('node:fs').then(fs=>fs.rmSync('dist',{recursive:true,force:true}))\"",
+    "prebuild": "npm run clean",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "node scripts/run-vitest.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "discord.js": "^14.26.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
+  }
+}

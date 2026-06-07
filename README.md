@@ -168,6 +168,10 @@ The test runner copies source files to a temporary directory before running Vite
 
 For release preparation, see [docs/github-publishing.md](./docs/github-publishing.md).
 
+## Support
+
+If this MCP server helps you manage Discord communities safely, support continued maintenance through GitHub Sponsors: [github.com/sponsors/TheStreamCode](https://github.com/sponsors/TheStreamCode).
+
 ## License
 
 MIT

@@ -62,5 +62,8 @@
     "tsx": "^4.22.3",
     "typescript": "^6.0.3",
     "vitest": "^4.1.7"
+  },
+  "overrides": {
+    "undici": "^6.27.0"
   }
 }

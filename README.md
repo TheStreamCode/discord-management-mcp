@@ -174,6 +174,10 @@ If this MCP server helps you manage Discord communities safely, support continue
 
 ## License
 
-MIT
+Project-owned code and materials are licensed under the [MIT License](./LICENSE).
 
 Copyright (c) 2026 Michael Gasperini.
+
+### Discord notice
+
+This independently developed project is not affiliated with, endorsed by, sponsored by, or approved by Discord Inc. Discord is a trademark of Discord Inc. The MIT License does not grant rights in Discord names, logos, services, branding, APIs, or content; use of those items is subject to Discord's applicable terms and policies. See [NOTICE](./NOTICE) for the [Discord Terms of Service](https://discord.com/terms), [Privacy Policy](https://discord.com/privacy), and [Developer Terms of Service](https://support-dev.discord.com/hc/en-us/articles/8562894815383-Discord-Developer-Terms-of-Service).

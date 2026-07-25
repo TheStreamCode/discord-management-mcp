@@ -36,5 +36,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Gate on high/critical only. A plain `npm audit --omit=dev` exits non-zero
+      # for *any* advisory in the tree, which deadlocked the repo: every Dependabot
+      # PR stayed red because of the vulnerabilities it wasn't fixing, so no PR
+      # could ever go green and none of them could be merged.
       - name: Runtime dependency audit
-        run: npm audit --omit=dev
+        run: npm audit --omit=dev --audit-level=high

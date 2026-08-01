@@ -1,6 +1,9 @@
 # Discord Management MCP
 
 [![CI](https://github.com/TheStreamCode/discord-management-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/TheStreamCode/discord-management-mcp/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/discord-management-mcp.svg)](https://www.npmjs.com/package/discord-management-mcp)
+[![node](https://img.shields.io/node/v/discord-management-mcp.svg)](https://nodejs.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
 ![Discord Management MCP hero](https://raw.githubusercontent.com/TheStreamCode/discord-management-mcp/main/discord-management-mcp.png)
 
@@ -41,18 +44,27 @@ ENABLE_GUILD_MEMBERS=false
 
 Use the token from **Discord Developer Portal > Application > Bot > Token**. Do not use the Application ID or Public Key.
 
-Install from source, build, and run:
+### Install from npm
+
+The published package is the quickest way to run the server without cloning:
+
+```bash
+npx --yes discord-management-mcp
+```
+
+It can also be installed globally or as a project dependency:
+
+```bash
+npm install -g discord-management-mcp
+npm install discord-management-mcp
+```
+
+### Install from source
 
 ```bash
 npm ci
 npm run build
 npm start
-```
-
-Published npm releases can also be run without cloning the repository:
-
-```bash
-npx --yes discord-management-mcp
 ```
 
 ## Discord Intents
@@ -180,7 +192,7 @@ The test runner copies source files to a temporary directory before running Vite
 - Backups can contain sensitive server structure and invite metadata; keep them private.
 - User tokens and selfbots are not supported.
 
-For release preparation, see [docs/github-publishing.md](./docs/github-publishing.md).
+For release preparation, see [docs/github-publishing.md](https://github.com/TheStreamCode/discord-management-mcp/blob/main/docs/github-publishing.md) in the repository.
 
 ## Support
 

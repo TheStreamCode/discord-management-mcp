@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.1.1 - 2026-08-01
+
+### Changed
+
+- The published npm package no longer ships `docs/implementation-plan.md` (a completed internal build
+  checklist) or `docs/github-publishing.md` (a maintainer-only release runbook). Both remain in the
+  repository; the `files` field now lists the four consumer-facing documents explicitly.
+- `docs/github-publishing.md` now records that the first npm publication is complete and describes the
+  pending migration from the bootstrap `NPM_TOKEN` secret to npm Trusted Publishing.
+
+### Fixed
+
+- `SECURITY.md` no longer states that tagged releases have not been introduced; supported versions now
+  reference the published `0.1.x` line.
+
+### Documentation
+
+- Added verified npm version, supported-Node, and license badges to the README.
+- Reorganized the README setup section so the published npm package is the primary install path, with
+  installation from source kept as a separate option.
+- `CITATION.cff` now declares `repository-code` and `date-released`.
+
 ## 0.1.0 - 2026-08-01
 
 ### Added

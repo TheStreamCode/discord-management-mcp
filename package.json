@@ -1,6 +1,6 @@
 {
   "name": "discord-management-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Safe-by-default Discord management MCP server with JSON backups, restore planning, and guarded mutations.",
   "license": "MIT",
@@ -31,7 +31,10 @@
   },
   "files": [
     "dist",
-    "docs",
+    "docs/configuration.md",
+    "docs/design.md",
+    "docs/safety-and-backups.md",
+    "docs/tools.md",
     "examples",
     "README.md",
     "CHANGELOG.md",

@@ -22,13 +22,19 @@ Before creating a release:
 7. Merge the release change through the protected `main` branch.
 8. Create a GitHub release whose tag exactly matches `vX.Y.Z`. Publishing the release triggers `.github/workflows/publish.yml`.
 
-## First npm Publication
+## npm Publication
 
 The package name is `discord-management-mcp` and publication is configured for the public npm registry.
+Version `0.1.0` was published on 2026-08-01 with npm provenance, bootstrapped by a granular automation
+token stored as the `NPM_TOKEN` repository secret.
 
-npm Trusted Publishing can only be configured after the package exists. Bootstrap the first GitHub release with a short-lived granular npm automation token stored as the `NPM_TOKEN` repository secret. Give it only the package publication permissions required for this release.
+The workflow grants `id-token: write`, runs on a GitHub-hosted runner, verifies source and release
+metadata, and publishes with npm provenance.
 
-After the first package version is visible on npm:
+### Pending: migrate to Trusted Publishing
+
+Now that the package exists on npm, the token bootstrap should be retired. This is a manual
+maintainer task on npmjs.com; it cannot be scripted from the repository.
 
 1. Configure npm Trusted Publishing for:
    - provider: GitHub Actions
@@ -36,10 +42,12 @@ After the first package version is visible on npm:
    - repository: `discord-management-mcp`
    - workflow: `publish.yml`
    - allowed action: `npm publish`
-2. Remove the `NPM_TOKEN` GitHub secret.
-3. Restrict traditional token-based publication in the npm package settings.
+2. Remove the `NODE_AUTH_TOKEN` env block from `.github/workflows/publish.yml`.
+3. Delete the `NPM_TOKEN` GitHub secret.
+4. Restrict traditional token-based publication in the npm package settings.
 
-The workflow grants `id-token: write`, runs on a GitHub-hosted runner, verifies source and release metadata, and publishes with npm provenance.
+Do not remove the secret before step 1 is complete: the publish workflow would lose its only
+credential and the next release would fail.
 
 ## GitHub Repository Settings
 

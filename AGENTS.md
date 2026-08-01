@@ -74,5 +74,9 @@ Run focused tests while iterating, then run `npm run preflight` before handing o
 - Do not commit, push, create tags/releases, change repository settings, or publish to npm unless the user explicitly authorizes that external action.
 - Keep the required `build-and-test` status context stable unless branch protection is updated in the same authorized operation.
 - Pin third-party GitHub Actions to full commit SHAs and retain a version comment.
-- For a release, update `package.json` and `package-lock.json`, `CHANGELOG.md`, and `CITATION.cff`; then run `npm run release:check -- vX.Y.Z`, `npm run preflight`, and `npm run pack:check`.
-- npm publication should use the `publish.yml` workflow with OIDC trusted publishing and provenance. A one-time `NPM_TOKEN` is allowed only to bootstrap the first publication and should be removed afterward.
+- For a release, update `package.json` and `package-lock.json`, `CHANGELOG.md`, and `CITATION.cff`; then run `npm run release:check -- vX.Y.Z`, `npm run preflight`, and `npm run pack:check`. `release:check` fails unless all three files agree on the version.
+- Never publish from a workstation. Publication happens only when a GitHub Release whose tag is `vX.Y.Z` is created; that event triggers `.github/workflows/publish.yml`, which republishes with provenance.
+- The package is live on npm as `discord-management-mcp` (first publication 2026-08-01). Trusted Publishing is not configured yet, so `publish.yml` still depends on the bootstrap `NPM_TOKEN` secret. Do not delete that secret or its `NODE_AUTH_TOKEN` env block until Trusted Publishing is configured on npmjs.com; see `docs/github-publishing.md`.
+- The `files` field lists consumer-facing documentation explicitly. `docs/implementation-plan.md` and `docs/github-publishing.md` are repository-only and must stay out of the npm tarball. Re-run `npm run pack:check` after touching `files` or adding a document.
+- `allowScripts` in `package.json` is a supported npm install-script allowlist, not dead metadata. Keep it in sync with the resolved `esbuild` version instead of deleting it.
+- `@types/node` is intentionally pinned to the 24.x line to match the `engines.node` runtime, and TypeScript is held at 6.x because the 7.x upgrade fails CI. Do not bump either just because `npm outdated` reports a newer major.

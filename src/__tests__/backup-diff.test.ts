@@ -100,4 +100,44 @@ describe("backup diff", () => {
       },
     ]);
   });
+
+  test("matches roles by immutable Discord ID when mutable key fields change", () => {
+    const before = role({
+      key: "role:old-name:1:12345678",
+      id: "12345678",
+      name: "Old Name",
+      position: 1,
+    });
+    const after = role({
+      key: "role:new-name:5:12345678",
+      id: "12345678",
+      name: "New Name",
+      position: 5,
+    });
+
+    expect(diffRoles([before], [after])).toEqual([
+      {
+        type: "update",
+        resource: "role",
+        key: before.key,
+        before,
+        after,
+        changes: ["name", "position"],
+      },
+    ]);
+  });
+
+  test("matches unique cross-guild resources semantically instead of duplicating them", () => {
+    const currentRole = role({ key: "role:member:1:target", id: "target", name: "Member" });
+    const desiredRole = role({ key: "role:member:1:source", id: "source", name: "Member" });
+    const currentChannel = channel({ key: "channel:general:0:target", id: "target", name: "general" });
+    const desiredChannel = channel({ key: "channel:general:0:source", id: "source", name: "general" });
+
+    expect(diffRoles([currentRole], [desiredRole])).toEqual([
+      { type: "skip", resource: "role", key: currentRole.key, reason: "no changes" },
+    ]);
+    expect(diffChannels([currentChannel], [desiredChannel])).toEqual([
+      { type: "skip", resource: "channel", key: currentChannel.key, reason: "no changes" },
+    ]);
+  });
 });

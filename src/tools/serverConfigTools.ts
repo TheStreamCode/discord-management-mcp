@@ -10,6 +10,11 @@ import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
 import { errorResponse, successResponse } from "../responses.js";
 import { requireConfirmation, requireDestructiveBackupForGuild } from "../safety.js";
+import {
+  additiveDiscordAnnotations,
+  destructiveDiscordAnnotations,
+  idempotentDiscordMutationAnnotations,
+} from "../toolAnnotations.js";
 
 const optionalReason = z.string().min(1).max(512).optional();
 const snowflake = z.string().min(1);
@@ -84,6 +89,7 @@ export function registerServerConfigTools(
     {
       title: "Update Discord guild settings",
       description: "Update basic guild settings such as name, description, moderation levels, locale, and AFK timeout.",
+      annotations: idempotentDiscordMutationAnnotations,
       inputSchema: {
         guildId: snowflake,
         name: z.string().min(2).max(100).optional(),
@@ -123,6 +129,7 @@ export function registerServerConfigTools(
     {
       title: "Create Discord invite",
       description: "Create an invite for a channel.",
+      annotations: additiveDiscordAnnotations,
       inputSchema: {
         channelId: snowflake,
         maxAge: z.number().int().min(0).max(604_800).optional(),
@@ -169,6 +176,7 @@ export function registerServerConfigTools(
     {
       title: "Create Discord webhook",
       description: "Create a webhook in a text-capable guild channel.",
+      annotations: additiveDiscordAnnotations,
       inputSchema: {
         channelId: snowflake,
         name: z.string().min(1).max(80),
@@ -210,6 +218,7 @@ export function registerServerConfigTools(
     {
       title: "Delete Discord webhook",
       description: "Delete a webhook by ID. Requires confirmation and either a backupId or allowWithoutBackup.",
+      annotations: destructiveDiscordAnnotations,
       inputSchema: {
         webhookId: snowflake,
         confirm: z.boolean().optional(),

@@ -15,7 +15,7 @@ Build a local, Node 24-compatible MCP server for Discord server management. The 
 
 ## Safety Model
 
-Read-only tools can run without confirmation. Mutating tools require `confirm: true` and a non-empty human-readable `reason`. Destructive tools also require either `backupId` or `allowWithoutBackup: true`. When the target guild is known, destructive guards load the backup and reject it if the backup guild ID does not match the target guild ID.
+Read-only tools can run without confirmation. Mutating tools require `confirm: true` and a non-empty human-readable `reason`. Delete and other high-impact destructive tools also require either `backupId` or `allowWithoutBackup: true`. When the target guild is known, destructive guards load the backup and reject it if the backup guild ID does not match the target guild ID.
 
 The MCP never prints the bot token. Errors mention missing/invalid token state without exposing secret values.
 
@@ -23,9 +23,9 @@ Message content reading is disabled by default. When enabled, the operator must 
 
 ## Backup Model
 
-Backups are JSON snapshots stored in `backups/`. A snapshot captures guild metadata, roles, channels/categories, permission overwrites, AutoMod rules, scheduled events, webhooks metadata, invites metadata, emojis, stickers, and application command metadata when available.
+Backups are JSON snapshots stored in `backups/`. A snapshot captures guild metadata, roles, channels/categories, permission overwrites, AutoMod rules, scheduled events, webhooks metadata, invites metadata, emojis, stickers, and application command metadata when available. Roles and channels are required core sections; capture fails closed if either section is unavailable. Optional sections are best-effort and record structured warnings.
 
-Restore is best-effort. Discord cannot preserve IDs for deleted/recreated objects, cannot restore message history, and does not expose every server setting. Restore plans report unsupported or lossy operations before apply. Restore apply is intentionally conservative: it creates a pre-restore backup, applies role/channel create and update operations, and only deletes when `includeDeletes: true` is provided.
+Restore is best-effort. Discord cannot preserve IDs for deleted/recreated objects, cannot restore message history, and does not expose every server setting. Restore plans report unsupported or lossy operations before apply. Restore apply is intentionally conservative: it creates a pre-restore backup, applies supported role/channel fields including positions, parents, and safely mappable permission overwrites, and only deletes when `includeDeletes: true` is provided.
 
 ## Tool Coverage
 

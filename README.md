@@ -1,6 +1,8 @@
 # Discord Management MCP
 
-![Discord Management MCP hero](./discord-management-mcp.png)
+[![CI](https://github.com/TheStreamCode/discord-management-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/TheStreamCode/discord-management-mcp/actions/workflows/ci.yml)
+
+![Discord Management MCP hero](https://raw.githubusercontent.com/TheStreamCode/discord-management-mcp/main/discord-management-mcp.png)
 
 Safe-by-default Discord management server for the Model Context Protocol (MCP). It lets MCP clients inspect and manage Discord guilds through a local stdio server, with JSON backups, restore planning, and explicit guardrails for risky operations.
 
@@ -11,10 +13,10 @@ Created by [Michael Gasperini](https://mikesoft.it). Repository: [TheStreamCode/
 - **Local stdio MCP server**: no public HTTP listener, no hosted service, no proxy.
 - **Discord-first tooling**: guild, channel, role, member, AutoMod, scheduled event, invite, webhook, emoji, sticker, and application-command tools.
 - **Safe mutations**: write operations require `confirm: true` and a non-empty `reason`.
-- **Destructive-operation guards**: destructive tools require a valid backup ID or an explicit `allowWithoutBackup: true`.
+- **High-impact operation guards**: delete and other high-impact tools require a valid backup ID or an explicit `allowWithoutBackup: true`.
 - **Guild-matched backups**: destructive guards reject backups from a different Discord guild.
 - **Readable JSON backups**: snapshots are stored locally and can be diffed or used for conservative restore planning.
-- **Conservative restore apply**: role/channel create and update operations only by default; deletes are opt-in.
+- **Conservative restore apply**: role/channel fields, ordering, parents, and safely mappable permission overwrites; deletes are opt-in.
 - **Optional message reading**: `Message Content` is disabled by default and must be explicitly enabled.
 
 ## Requirements
@@ -39,12 +41,18 @@ ENABLE_GUILD_MEMBERS=false
 
 Use the token from **Discord Developer Portal > Application > Bot > Token**. Do not use the Application ID or Public Key.
 
-Install, build, and run:
+Install from source, build, and run:
 
 ```bash
-npm install
+npm ci
 npm run build
 npm start
+```
+
+Published npm releases can also be run without cloning the repository:
+
+```bash
+npx --yes discord-management-mcp
 ```
 
 ## Discord Intents
@@ -82,6 +90,10 @@ If installed as a package, the binary entry is:
 discord-management-mcp
 ```
 
+For an npm-based MCP client configuration, use `npx` as the command and
+`["--yes", "discord-management-mcp"]` as the arguments. Environment variables,
+including `DISCORD_TOKEN`, should be supplied through the client's secure environment configuration.
+
 ## Safety Model
 
 Read-only tools do not require confirmation.
@@ -95,7 +107,7 @@ Mutating tools require:
 }
 ```
 
-Destructive tools also require either:
+Delete and other high-impact destructive tools also require either:
 
 ```json
 {
@@ -129,7 +141,7 @@ Recommended workflow:
 
 Restore is best-effort. Discord cannot restore original IDs after recreation, message history, audit-log history, invite codes, webhook tokens, managed integration-owned roles, or every community/discovery setting.
 
-`discord_backup_restore_apply` is intentionally conservative: it creates a pre-restore backup automatically, applies role/channel create and update operations, and skips deletes unless `includeDeletes: true` is set.
+`discord_backup_restore_apply` is intentionally conservative: it creates a pre-restore backup automatically, applies supported role/channel fields and permission overwrites, and skips deletes unless `includeDeletes: true` is set. When a cross-guild permission target cannot be mapped safely, existing overwrites are preserved and the skipped mapping is reported.
 
 ## Tool Coverage
 
@@ -153,6 +165,8 @@ npm run typecheck
 npm test
 npm run build
 npm run check
+npm run preflight
+npm run pack:check
 npm audit --omit=dev
 ```
 

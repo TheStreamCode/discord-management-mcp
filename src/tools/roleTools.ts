@@ -10,6 +10,11 @@ import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
 import { errorResponse, successResponse } from "../responses.js";
 import { requireConfirmation, requireDestructiveBackupForGuild } from "../safety.js";
+import {
+  additiveDiscordAnnotations,
+  destructiveDiscordAnnotations,
+  idempotentDiscordMutationAnnotations,
+} from "../toolAnnotations.js";
 
 const confirmSchema = {
   confirm: z.boolean().optional(),
@@ -101,7 +106,7 @@ export function registerRoleTools(
         ...confirmSchema,
       },
       outputSchema: roleMutationResultSchema,
-      annotations: { destructiveHint: false, idempotentHint: false },
+      annotations: additiveDiscordAnnotations,
     },
     async (input) => {
       try {
@@ -152,7 +157,7 @@ export function registerRoleTools(
         ...confirmSchema,
       },
       outputSchema: roleMutationResultSchema,
-      annotations: { destructiveHint: true, idempotentHint: false },
+      annotations: idempotentDiscordMutationAnnotations,
     },
     async (input) => {
       try {
@@ -208,7 +213,7 @@ export function registerRoleTools(
         ...confirmSchema,
       },
       outputSchema: roleMutationResultSchema,
-      annotations: { destructiveHint: true, idempotentHint: false },
+      annotations: destructiveDiscordAnnotations,
     },
     async (input) => {
       try {
@@ -249,7 +254,7 @@ export function registerRoleTools(
         ...confirmSchema,
       },
       outputSchema: roleMutationResultSchema,
-      annotations: { destructiveHint: false, idempotentHint: false },
+      annotations: additiveDiscordAnnotations,
     },
     async (input) => {
       try {
@@ -292,7 +297,7 @@ export function registerRoleTools(
         ...confirmSchema,
       },
       outputSchema: roleMutationResultSchema,
-      annotations: { destructiveHint: false, idempotentHint: false },
+      annotations: idempotentDiscordMutationAnnotations,
     },
     async (input) => {
       try {
@@ -334,7 +339,7 @@ export function registerRoleTools(
         ...confirmSchema,
       },
       outputSchema: roleMutationResultSchema,
-      annotations: { destructiveHint: true, idempotentHint: false },
+      annotations: idempotentDiscordMutationAnnotations,
     },
     async (input) => {
       try {

@@ -15,9 +15,9 @@ Every mutating tool requires:
 
 The `reason` is passed to Discord where the API supports audit-log reasons.
 
-## Destructive Guard
+## High-Impact Destructive Guard
 
-Destructive tools require either a backup:
+Delete and other high-impact destructive tools require either a backup:
 
 ```json
 {
@@ -47,4 +47,8 @@ Restore is best-effort. Discord does not allow full restoration of:
 - Managed integration-owned roles
 - Every community, discovery, or boost-related setting
 
-`discord_backup_restore_apply` creates a pre-restore backup first and only applies conservative role/channel create and update operations by default.
+`discord_backup_restore_apply` creates a pre-restore backup first and only applies conservative role/channel create and update operations by default; deletes remain opt-in.
+
+Role and channel identity is matched by Discord ID first and by an unambiguous semantic match when cloning across guilds. Restore applies supported positions, parents, and permission overwrites; targets that cannot be mapped safely are reported and left unchanged rather than partially replacing permissions.
+
+Role and channel capture is mandatory. If either core section cannot be read, backup creation fails closed instead of writing a partial snapshot that could provide a false sense of rollback safety. Optional sections remain best-effort and produce structured warnings.

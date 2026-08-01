@@ -18,6 +18,7 @@ import { z } from "zod";
 import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
 import { errorResponse, successResponse } from "../responses.js";
+import { readOnlyDiscordAnnotations } from "../toolAnnotations.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -45,13 +46,6 @@ const listMessagesSchema = {
   after: z.string().min(1).optional(),
   around: z.string().min(1).optional(),
 };
-const readOnlyAnnotations = {
-  readOnlyHint: true,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: true,
-};
-
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown Discord API error.";
 }
@@ -400,7 +394,7 @@ export function registerGuildTools(
     {
       description: "List Discord guilds visible to the configured bot.",
       inputSchema: emptySchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async () => {
       try {
@@ -423,7 +417,7 @@ export function registerGuildTools(
     {
       description: "Get Discord guild metadata.",
       inputSchema: guildIdSchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId }) => {
       try {
@@ -445,7 +439,7 @@ export function registerGuildTools(
     {
       description: "List channels in a Discord guild.",
       inputSchema: guildIdSchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId }) => {
       try {
@@ -472,7 +466,7 @@ export function registerGuildTools(
     {
       description: "Get Discord channel metadata.",
       inputSchema: channelIdSchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId, channelId }) => {
       try {
@@ -501,7 +495,7 @@ export function registerGuildTools(
       description:
         "List recent messages from a text-based channel. Requires ENABLE_MESSAGE_CONTENT=true and the Discord Message Content privileged intent.",
       inputSchema: listMessagesSchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId, channelId, limit, before, after, around }) => {
       if (!config.enableMessageContent) {
@@ -574,7 +568,7 @@ export function registerGuildTools(
     {
       description: "List roles in a Discord guild.",
       inputSchema: guildIdSchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId }) => {
       try {
@@ -599,7 +593,7 @@ export function registerGuildTools(
     {
       description: "Get Discord role metadata.",
       inputSchema: roleIdSchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId, roleId }) => {
       try {
@@ -627,7 +621,7 @@ export function registerGuildTools(
     {
       description: "List guild members, capped at 1000.",
       inputSchema: listMembersSchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId, limit, after }) => {
       try {
@@ -658,7 +652,7 @@ export function registerGuildTools(
     {
       description: "List AutoMod rules in a Discord guild.",
       inputSchema: guildIdSchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId }) => {
       try {
@@ -685,7 +679,7 @@ export function registerGuildTools(
     {
       description: "List scheduled events in a Discord guild.",
       inputSchema: guildIdSchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId }) => {
       try {
@@ -712,7 +706,7 @@ export function registerGuildTools(
     {
       description: "List webhooks in a Discord guild without exposing tokens.",
       inputSchema: guildIdSchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId }) => {
       try {
@@ -737,7 +731,7 @@ export function registerGuildTools(
     {
       description: "List invites in a Discord guild.",
       inputSchema: guildIdSchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId }) => {
       try {
@@ -762,7 +756,7 @@ export function registerGuildTools(
     {
       description: "List emojis in a Discord guild.",
       inputSchema: guildIdSchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId }) => {
       try {
@@ -787,7 +781,7 @@ export function registerGuildTools(
     {
       description: "List stickers in a Discord guild.",
       inputSchema: guildIdSchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId }) => {
       try {
@@ -812,7 +806,7 @@ export function registerGuildTools(
     {
       description: "List guild application commands.",
       inputSchema: guildIdSchema,
-      annotations: readOnlyAnnotations,
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId }) => {
       try {

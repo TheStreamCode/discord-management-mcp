@@ -16,6 +16,11 @@ import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
 import { errorResponse, successResponse } from "../responses.js";
 import { requireConfirmation, requireDestructiveBackupForGuild } from "../safety.js";
+import {
+  additiveDiscordAnnotations,
+  destructiveDiscordAnnotations,
+  idempotentDiscordMutationAnnotations,
+} from "../toolAnnotations.js";
 
 const optionalReason = z.string().min(1).max(512).optional();
 const snowflake = z.string().min(1);
@@ -205,6 +210,7 @@ export function registerModerationTools(
     {
       title: "Timeout Discord member",
       description: "Timeout a guild member for the requested duration in seconds.",
+      annotations: idempotentDiscordMutationAnnotations,
       inputSchema: {
         guildId: snowflake,
         userId: snowflake,
@@ -236,6 +242,7 @@ export function registerModerationTools(
     {
       title: "Kick Discord member",
       description: "Kick a guild member. Requires confirmation and either a backupId or allowWithoutBackup.",
+      annotations: destructiveDiscordAnnotations,
       inputSchema: {
         guildId: snowflake,
         userId: snowflake,
@@ -264,6 +271,7 @@ export function registerModerationTools(
     {
       title: "Ban Discord member",
       description: "Ban a guild member. Requires confirmation and either a backupId or allowWithoutBackup.",
+      annotations: destructiveDiscordAnnotations,
       inputSchema: {
         guildId: snowflake,
         userId: snowflake,
@@ -299,6 +307,7 @@ export function registerModerationTools(
     {
       title: "Unban Discord member",
       description: "Remove a guild ban for a user.",
+      annotations: idempotentDiscordMutationAnnotations,
       inputSchema: {
         guildId: snowflake,
         userId: snowflake,
@@ -323,6 +332,7 @@ export function registerModerationTools(
     {
       title: "Bulk delete Discord messages",
       description: "Bulk delete messages by count or explicit message IDs. Requires confirmation and backup acknowledgement.",
+      annotations: destructiveDiscordAnnotations,
       inputSchema: {
         channelId: snowflake,
         limit: z.number().int().min(1).max(100).optional(),
@@ -373,6 +383,7 @@ export function registerModerationTools(
     {
       title: "Create Discord AutoMod rule",
       description: "Create a Discord AutoMod rule with JSON trigger metadata and actions.",
+      annotations: additiveDiscordAnnotations,
       inputSchema: {
         guildId: snowflake,
         name: z.string().min(1).max(100),
@@ -409,6 +420,7 @@ export function registerModerationTools(
     {
       title: "Update Discord AutoMod rule",
       description: "Update a Discord AutoMod rule with JSON trigger metadata and actions.",
+      annotations: idempotentDiscordMutationAnnotations,
       inputSchema: {
         guildId: snowflake,
         ruleId: snowflake,
@@ -450,6 +462,7 @@ export function registerModerationTools(
     {
       title: "Delete Discord AutoMod rule",
       description: "Delete a Discord AutoMod rule.",
+      annotations: destructiveDiscordAnnotations,
       inputSchema: {
         guildId: snowflake,
         ruleId: snowflake,
@@ -482,6 +495,7 @@ export function registerModerationTools(
     {
       title: "Create Discord scheduled event",
       description: "Create a Discord scheduled event. Use channelId for voice/stage events or location for external events.",
+      annotations: additiveDiscordAnnotations,
       inputSchema: {
         guildId: snowflake,
         name: z.string().min(1).max(100),
@@ -520,6 +534,7 @@ export function registerModerationTools(
     {
       title: "Update Discord scheduled event",
       description: "Update a Discord scheduled event.",
+      annotations: idempotentDiscordMutationAnnotations,
       inputSchema: {
         guildId: snowflake,
         eventId: snowflake,
@@ -565,6 +580,7 @@ export function registerModerationTools(
     {
       title: "Delete Discord scheduled event",
       description: "Delete a Discord scheduled event.",
+      annotations: destructiveDiscordAnnotations,
       inputSchema: {
         guildId: snowflake,
         eventId: snowflake,

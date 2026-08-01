@@ -1,12 +1,107 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 import { schemaVersion, type Snapshot } from "./schema.js";
 
 const BACKUP_EXTENSION = ".json";
 const BACKUP_ID_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[A-Za-z0-9._-]+\.json$/;
+const bitfieldSchema = z.string().regex(/^\d+$/, "expected a non-negative decimal bitfield");
+const jsonValueSchema: z.ZodType = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(jsonValueSchema),
+    z.record(z.string(), jsonValueSchema),
+  ]),
+);
+const permissionOverwriteSchema = z.object({
+  id: z.string().min(1),
+  type: z.enum(["role", "member"]),
+  targetKey: z.string().min(1).optional(),
+  allow: bitfieldSchema,
+  deny: bitfieldSchema,
+}).strict();
+const roleSchema = z.object({
+  key: z.string().min(1),
+  id: z.string().min(1),
+  name: z.string(),
+  color: z.number().int().min(0),
+  hoist: z.boolean(),
+  mentionable: z.boolean(),
+  permissions: bitfieldSchema,
+  position: z.number().int(),
+  managed: z.boolean(),
+  icon: z.string().nullable().optional(),
+  unicodeEmoji: z.string().nullable().optional(),
+}).strict();
+const channelSchema = z.object({
+  key: z.string().min(1),
+  id: z.string().min(1),
+  name: z.string(),
+  type: z.number().int(),
+  parentKey: z.string().nullable(),
+  position: z.number().int(),
+  topic: z.string().nullable().optional(),
+  nsfw: z.boolean().optional(),
+  rateLimitPerUser: z.number().int().nullable().optional(),
+  permissionOverwrites: z.array(permissionOverwriteSchema),
+}).strict();
+const snapshotSchema = z.object({
+  schemaVersion: z.literal(schemaVersion),
+  capturedAt: z.string().datetime(),
+  guild: z.object({
+    id: z.string().min(1),
+    name: z.string(),
+    icon: z.string().nullable(),
+    ownerId: z.string().nullable(),
+    preferredLocale: z.string().nullable(),
+    verificationLevel: z.number().int(),
+    defaultMessageNotifications: z.number().int(),
+    explicitContentFilter: z.number().int(),
+    features: z.array(z.string()),
+  }).strict(),
+  warnings: z.array(z.object({
+    section: z.string().min(1),
+    message: z.string(),
+  }).strict()).optional(),
+  roles: z.array(roleSchema),
+  channels: z.array(channelSchema),
+  autoModRules: z.array(z.object({
+    key: z.string().min(1),
+    id: z.string().min(1),
+    name: z.string(),
+    enabled: z.boolean(),
+    eventType: z.number().int(),
+    triggerType: z.number().int(),
+    triggerMetadata: jsonValueSchema,
+    actions: z.array(jsonValueSchema),
+    exemptRoleKeys: z.array(z.string()),
+    exemptChannelKeys: z.array(z.string()),
+  }).strict()),
+  scheduledEvents: z.array(z.object({
+    key: z.string().min(1),
+    id: z.string().min(1),
+    name: z.string(),
+    description: z.string().nullable(),
+    scheduledStartTime: z.string().datetime(),
+    scheduledEndTime: z.string().datetime().nullable(),
+    privacyLevel: z.number().int(),
+    entityType: z.number().int(),
+    entityMetadata: jsonValueSchema,
+    channelKey: z.string().nullable(),
+    status: z.number().int(),
+  }).strict()),
+  webhooks: z.array(jsonValueSchema).optional(),
+  invites: z.array(jsonValueSchema).optional(),
+  emojis: z.array(jsonValueSchema).optional(),
+  stickers: z.array(jsonValueSchema).optional(),
+  applicationCommands: z.array(jsonValueSchema).optional(),
+}).strict();
 
 export async function ensureBackupDir(backupDir: string): Promise<void> {
-  await mkdir(backupDir, { recursive: true });
+  await mkdir(backupDir, { recursive: true, mode: 0o700 });
 }
 
 export function createBackupId(date: Date, guildId: string): string {
@@ -27,7 +122,7 @@ export async function writeSnapshot(
   const backupPath = backupPathForId(backupDir, backupId);
   const payload = `${JSON.stringify(snapshot, null, 2)}\n`;
 
-  await writeFile(backupPath, payload, "utf8");
+  await writeFile(backupPath, payload, { encoding: "utf8", flag: "wx", mode: 0o600 });
 
   return backupId;
 }
@@ -81,15 +176,12 @@ function validateSnapshot(value: unknown): Snapshot {
     throw new Error(`Unsupported backup schema version: ${String(snapshot.schemaVersion)}`);
   }
 
-  if (!snapshot.guild || typeof snapshot.guild.id !== "string") {
-    throw new Error("Invalid backup snapshot: missing guild.id.");
+  const parsed = snapshotSchema.safeParse(value);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const location = issue?.path.length ? issue.path.join(".") : "root";
+    throw new Error(`Invalid backup snapshot at ${location}: ${issue?.message ?? "validation failed"}`);
   }
 
-  for (const key of ["roles", "channels", "autoModRules", "scheduledEvents"] as const) {
-    if (!Array.isArray(snapshot[key])) {
-      throw new Error(`Invalid backup snapshot: ${key} must be an array.`);
-    }
-  }
-
-  return snapshot as Snapshot;
+  return parsed.data as Snapshot;
 }

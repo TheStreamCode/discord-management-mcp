@@ -2,6 +2,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createRequire } from "node:module";
 import { loadConfig } from "./config.js";
 import { DiscordClientManager } from "./discordClient.js";
 import { registerBackupTools } from "./tools/backupTools.js";
@@ -11,6 +12,8 @@ import { registerModerationTools } from "./tools/moderationTools.js";
 import { registerRoleTools } from "./tools/roleTools.js";
 import { registerServerConfigTools } from "./tools/serverConfigTools.js";
 
+const packageMetadata = createRequire(import.meta.url)("../package.json") as { version: string };
+
 const config = loadConfig();
 const discord = new DiscordClientManager(config.discordToken, {
   enableMessageContent: config.enableMessageContent,
@@ -19,7 +22,7 @@ const discord = new DiscordClientManager(config.discordToken, {
 
 const server = new McpServer({
   name: "discord-management-mcp",
-  version: "0.1.0",
+  version: packageMetadata.version,
 });
 
 registerGuildTools(server, discord, config);

@@ -8,7 +8,7 @@ Security fixes target the latest `main` branch until tagged releases are introdu
 
 Do not open a public issue for secrets, bypasses, or exploitable behavior.
 
-Report privately to [Michael Gasperini](https://mikesoft.it) or the repository maintainer. Include:
+Report privately through [GitHub private vulnerability reporting](https://github.com/TheStreamCode/discord-management-mcp/security/advisories/new). If GitHub reporting is unavailable, contact [Michael Gasperini](https://mikesoft.it). Include:
 
 - Impacted version or commit
 - Reproduction steps

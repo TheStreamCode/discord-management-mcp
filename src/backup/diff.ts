@@ -9,28 +9,46 @@ type DiffResource = "role" | "channel";
 type DiffableSnapshot = RoleSnapshot | ChannelSnapshot;
 
 export function diffRoles(before: RoleSnapshot[], after: RoleSnapshot[]): RestoreOperation[] {
-  return diffByKey("role", before, after, normalizeRole, (snapshot) =>
-    snapshot.managed ? "managed role" : null,
+  return diffSnapshots(
+    "role",
+    before,
+    after,
+    normalizeRole,
+    (snapshot) => snapshot.name,
+    (snapshot) => (snapshot.managed ? "managed role" : null),
   );
 }
 
 export function diffChannels(before: ChannelSnapshot[], after: ChannelSnapshot[]): RestoreOperation[] {
-  return diffByKey("channel", before, after, normalizeChannel);
+  return diffSnapshots(
+    "channel",
+    before,
+    after,
+    normalizeChannel,
+    (snapshot) => `${snapshot.type}:${snapshot.name}`,
+  );
 }
 
-function diffByKey<TSnapshot extends DiffableSnapshot>(
+function diffSnapshots<TSnapshot extends DiffableSnapshot>(
   resource: DiffResource,
   before: TSnapshot[],
   after: TSnapshot[],
   normalize: (snapshot: TSnapshot) => Record<string, unknown>,
+  semanticIdentity: (snapshot: TSnapshot) => string,
   skipReason: (snapshot: TSnapshot) => string | null = () => null,
 ): RestoreOperation[] {
-  const beforeByKey = new Map(before.map((snapshot) => [snapshot.key, snapshot]));
-  const afterByKey = new Map(after.map((snapshot) => [snapshot.key, snapshot]));
+  const unmatchedAfter = new Set(after.map((_, index) => index));
   const operations: RestoreOperation[] = [];
 
   for (const beforeSnapshot of before) {
-    const reason = skipReason(beforeSnapshot);
+    const afterIndex = findMatchIndex(beforeSnapshot, after, unmatchedAfter, semanticIdentity);
+    const afterSnapshot = afterIndex === undefined ? undefined : after[afterIndex];
+
+    if (afterIndex !== undefined) {
+      unmatchedAfter.delete(afterIndex);
+    }
+
+    const reason = skipReason(beforeSnapshot) ?? (afterSnapshot ? skipReason(afterSnapshot) : null);
 
     if (reason !== null) {
       operations.push({
@@ -41,8 +59,6 @@ function diffByKey<TSnapshot extends DiffableSnapshot>(
       });
       continue;
     }
-
-    const afterSnapshot = afterByKey.get(beforeSnapshot.key);
 
     if (afterSnapshot === undefined) {
       operations.push({
@@ -76,11 +92,8 @@ function diffByKey<TSnapshot extends DiffableSnapshot>(
     });
   }
 
-  for (const afterSnapshot of after) {
-    if (beforeByKey.has(afterSnapshot.key)) {
-      continue;
-    }
-
+  for (const afterIndex of unmatchedAfter) {
+    const afterSnapshot = after[afterIndex]!;
     const reason = skipReason(afterSnapshot);
 
     operations.push(
@@ -103,14 +116,41 @@ function diffByKey<TSnapshot extends DiffableSnapshot>(
   return operations;
 }
 
+function findMatchIndex<TSnapshot extends DiffableSnapshot>(
+  beforeSnapshot: TSnapshot,
+  after: TSnapshot[],
+  unmatchedAfter: Set<number>,
+  semanticIdentity: (snapshot: TSnapshot) => string,
+): number | undefined {
+  const candidates = [...unmatchedAfter];
+  const idMatch = candidates.find((index) => after[index]?.id === beforeSnapshot.id);
+
+  if (idMatch !== undefined) {
+    return idMatch;
+  }
+
+  const keyMatch = candidates.find((index) => after[index]?.key === beforeSnapshot.key);
+
+  if (keyMatch !== undefined) {
+    return keyMatch;
+  }
+
+  const semanticKey = semanticIdentity(beforeSnapshot);
+  const semanticMatches = candidates.filter(
+    (index) => after[index] && semanticIdentity(after[index]) === semanticKey,
+  );
+
+  return semanticMatches.length === 1 ? semanticMatches[0] : undefined;
+}
+
 function normalizeRole(snapshot: RoleSnapshot): Record<string, unknown> {
-  const { id: _id, ...normalized } = snapshot;
+  const { id: _id, key: _key, ...normalized } = snapshot;
 
   return normalized;
 }
 
 function normalizeChannel(snapshot: ChannelSnapshot): Record<string, unknown> {
-  const { id: _id, permissionOverwrites, ...normalized } = snapshot;
+  const { id: _id, key: _key, permissionOverwrites, ...normalized } = snapshot;
 
   return {
     ...normalized,

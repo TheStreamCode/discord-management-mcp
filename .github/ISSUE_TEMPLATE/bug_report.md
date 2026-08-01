@@ -23,5 +23,10 @@ assignees: ''
 ## Environment
 
 - Version:
+- Node.js and npm versions:
 - MCP client:
 - OS:
+
+## Logs or Diagnostics
+
+<!-- Remove bot tokens, webhook URLs, invite codes, and private guild data. -->

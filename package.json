@@ -16,6 +16,7 @@
   "bugs": {
     "url": "https://github.com/TheStreamCode/discord-management-mcp/issues"
   },
+  "funding": "https://github.com/sponsors/TheStreamCode",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -33,15 +34,21 @@
     "docs",
     "examples",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "NOTICE",
     "SECURITY.md",
     "CONTRIBUTING.md",
-    "discord-management-mcp.png",
     ".env.example"
   ],
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.0.0",
+    "npm": ">=11.5.1"
+  },
+  "packageManager": "npm@11.16.0",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
     "clean": "node -e \"import('node:fs').then(fs=>fs.rmSync('dist',{recursive:true,force:true}))\"",
@@ -49,22 +56,31 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
+    "lint": "eslint .",
     "test": "node scripts/run-vitest.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run lint && npm run typecheck && npm test",
+    "preflight": "npm run check && npm run build",
+    "pack:check": "npm pack --dry-run --json",
+    "release:check": "node scripts/verify-release.mjs",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run check"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "discord.js": "^14.26.4",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "discord.js": "^14.27.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^24.13.3",
-    "tsx": "^4.23.0",
+    "eslint": "^10.8.0",
+    "tsx": "^4.23.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "typescript-eslint": "^8.65.0",
+    "vitest": "^4.1.10"
   },
-  "overrides": {
-    "undici": "^6.27.0"
+  "allowScripts": {
+    "esbuild@0.28.1": true
   }
 }

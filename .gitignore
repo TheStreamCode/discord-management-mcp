@@ -6,4 +6,5 @@ coverage/
 !.env.example
 backups/
 *.log
-
+*.tgz
+.eslintcache

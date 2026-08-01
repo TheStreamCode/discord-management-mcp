@@ -71,5 +71,5 @@ All tools use the `discord_` prefix.
 
 - Read-only tools do not require confirmation.
 - Mutating tools require `confirm: true` and `reason`.
-- Destructive tools require `backupId` or `allowWithoutBackup: true`.
+- Delete and other high-impact destructive tools require `backupId` or `allowWithoutBackup: true`.
 - Backup IDs are validated and destructive guild-targeted actions reject backups from another guild.

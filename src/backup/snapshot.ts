@@ -6,8 +6,8 @@ type CollectionLike<T> = Iterable<T> | { values(): IterableIterator<T> } | { map
 
 export async function createSnapshot(guild: Guild, capturedAt = new Date()): Promise<Snapshot> {
   const warnings: SnapshotWarning[] = [];
-  const roles = await fetchCollection("roles", guild.roles?.fetch?.bind(guild.roles), warnings);
-  const channels = await fetchCollection("channels", guild.channels?.fetch?.bind(guild.channels), warnings);
+  const roles = await fetchRequiredCollection("roles", guild.roles?.fetch?.bind(guild.roles));
+  const channels = await fetchRequiredCollection("channels", guild.channels?.fetch?.bind(guild.channels));
   const channelKeysById = buildChannelKeysById(channels);
   const roleKeysById = buildRoleKeysById(roles);
 
@@ -39,7 +39,7 @@ export async function createSnapshot(guild: Guild, capturedAt = new Date()): Pro
       icon: valueOrNull(role.icon),
       unicodeEmoji: valueOrNull(role.unicodeEmoji),
     })),
-    channels: channels.map((channel) => serializeChannel(channel, channelKeysById)),
+    channels: channels.map((channel) => serializeChannel(channel, channelKeysById, roleKeysById)),
     autoModRules: (await fetchCollection(
       "autoModRules",
       guild.autoModerationRules?.fetch?.bind(guild.autoModerationRules),
@@ -85,7 +85,11 @@ export async function createSnapshot(guild: Guild, capturedAt = new Date()): Pro
   };
 }
 
-function serializeChannel(channel: AnyRecord, channelKeysById: Map<string, string>): ChannelSnapshot {
+function serializeChannel(
+  channel: AnyRecord,
+  channelKeysById: Map<string, string>,
+  roleKeysById: Map<string, string>,
+): ChannelSnapshot {
   const key = channelKey(channel);
   const parentId = typeof channel.parentId === "string" ? channel.parentId : null;
 
@@ -100,12 +104,18 @@ function serializeChannel(channel: AnyRecord, channelKeysById: Map<string, strin
     nsfw: "nsfw" in channel ? Boolean(channel.nsfw) : undefined,
     rateLimitPerUser: "rateLimitPerUser" in channel ? nullableNumber(channel.rateLimitPerUser) : undefined,
     permissionOverwrites: toArray((channel.permissionOverwrites as { cache?: unknown } | undefined)?.cache)
-      .map((overwrite) => ({
-        id: String(overwrite.id),
-        type: overwriteType(overwrite.type),
-        allow: bitfieldString(overwrite.allow),
-        deny: bitfieldString(overwrite.deny),
-      }))
+      .map((overwrite) => {
+        const id = String(overwrite.id);
+        const type = overwriteType(overwrite.type);
+
+        return {
+          id,
+          type,
+          targetKey: type === "role" ? roleKeysById.get(id) : undefined,
+          allow: bitfieldString(overwrite.allow),
+          deny: bitfieldString(overwrite.deny),
+        };
+      })
       .sort((left, right) => `${left.type}:${left.id}`.localeCompare(`${right.type}:${right.id}`)),
   };
 }
@@ -161,6 +171,24 @@ async function fetchCollection(
   } catch (error) {
     warnings.push({ section, message: errorMessage(error) });
     return [];
+  }
+}
+
+async function fetchRequiredCollection(
+  section: string,
+  fetcher: (() => Promise<unknown>) | undefined,
+): Promise<AnyRecord[]> {
+  if (!fetcher) {
+    throw new Error(`Cannot capture required snapshot section: ${section}.`);
+  }
+
+  try {
+    return toArray(await fetcher());
+  } catch (error) {
+    throw new Error(
+      `Failed to capture required snapshot section ${section}: ${errorMessage(error)}`,
+      { cause: error },
+    );
   }
 }
 

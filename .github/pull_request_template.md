@@ -18,9 +18,16 @@ Fixes #
 
 ## Testing
 
-- [ ] `npm run check` passes
-- [ ] Tested mutation guard with a real Discord server
-- [ ] Tested backup/restore flow end-to-end
+- [ ] `npm run preflight` passes
+- [ ] `npm run pack:check` passes when package or release files changed
+- [ ] Added or updated regression tests for changed behavior
+- [ ] No live Discord mutation was required, or the authorized test guild and result are documented below
+- [ ] Backup/restore changes were exercised end-to-end with mocks or an authorized test guild
+
+## Release impact
+
+- [ ] `CHANGELOG.md` updated when user-visible behavior changed
+- [ ] Package version remains unchanged, or release metadata is consistent
 
 ## Notes
 

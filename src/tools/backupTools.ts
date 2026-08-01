@@ -1,5 +1,5 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ChannelType, PermissionsBitField, type Guild } from "discord.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ChannelType, OverwriteType, PermissionsBitField, type Guild } from "discord.js";
 import { z } from "zod";
 import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
@@ -9,6 +9,7 @@ import { listBackups, readSnapshot, writeSnapshot } from "../backup/store.js";
 import {
   schemaVersion,
   type ChannelSnapshot,
+  type PermissionOverwriteSnapshot,
   type RestoreOperation,
   type RestorePlan,
   type RestoreWarning,
@@ -17,6 +18,12 @@ import {
 } from "../backup/schema.js";
 import { errorResponse, successResponse } from "../responses.js";
 import { requireConfirmation } from "../safety.js";
+import {
+  additiveDiscordAnnotations,
+  destructiveDiscordAnnotations,
+  localReadOnlyAnnotations,
+  readOnlyDiscordAnnotations,
+} from "../toolAnnotations.js";
 
 export function registerBackupTools(
   server: McpServer,
@@ -36,13 +43,9 @@ export function registerBackupTools(
         guildId: z.string(),
         capturedAt: z.string(),
         counts: countsSchema(),
+        warnings: snapshotWarningsSchema(),
       },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: true,
-      },
+      annotations: additiveDiscordAnnotations,
     },
     async ({ guildId }) => {
       try {
@@ -75,12 +78,7 @@ export function registerBackupTools(
         backupIds: z.array(z.string()),
         count: z.number(),
       },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
+      annotations: localReadOnlyAnnotations,
     },
     async () => {
       try {
@@ -110,13 +108,9 @@ export function registerBackupTools(
         backupId: z.string(),
         snapshot: z.unknown(),
         counts: countsSchema(),
+        warnings: snapshotWarningsSchema(),
       },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
+      annotations: localReadOnlyAnnotations,
     },
     async ({ backupId }) => {
       try {
@@ -152,12 +146,7 @@ export function registerBackupTools(
         operations: z.array(z.unknown()),
         summary: summarySchema(),
       },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
+      annotations: localReadOnlyAnnotations,
     },
     async ({ beforeBackupId, afterBackupId }) => {
       try {
@@ -196,12 +185,7 @@ export function registerBackupTools(
         summary: summarySchema(),
         safetyMessage: z.string(),
       },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: true,
-      },
+      annotations: readOnlyDiscordAnnotations,
     },
     async ({ backupId, targetGuildId }) => {
       try {
@@ -261,12 +245,7 @@ export function registerBackupTools(
         skipped: z.array(z.unknown()),
         warnings: z.array(z.unknown()),
       },
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: false,
-        openWorldHint: true,
-      },
+      annotations: destructiveDiscordAnnotations,
     },
     async (input) => {
       try {
@@ -343,7 +322,7 @@ function restoreWarnings(sourceGuildId: string, targetGuildId: string): RestoreW
   return warnings;
 }
 
-async function applyRestoreOperations(
+export async function applyRestoreOperations(
   guild: Guild,
   desired: Snapshot,
   operations: RestoreOperation[],
@@ -351,23 +330,30 @@ async function applyRestoreOperations(
 ): Promise<{ applied: unknown[]; skipped: unknown[] }> {
   const applied: unknown[] = [];
   const skipped: unknown[] = [];
-  const roleIdByKey = new Map(desired.roles.map((role) => [role.key, role.id]));
-  const channelIdByKey = new Map(desired.channels.map((channel) => [channel.key, channel.id]));
+  const roleIdByKey = new Map<string, string>();
+  const channelIdByKey = new Map<string, string>();
+  const liveRoles = await guild.roles.fetch().then((roles) => [...roles.values()]);
+  const liveChannels = await guild.channels.fetch().then((channels) =>
+    [...channels.values()].filter((channel) => channel !== null),
+  );
 
-  for (const role of await guild.roles.fetch().then((roles) => [...roles.values()])) {
-    const matching = desired.roles.find((snapshot) => snapshot.id === role.id || snapshot.name === role.name);
+  for (const snapshot of desired.roles) {
+    const exact = liveRoles.find((role) => role.id === snapshot.id);
+    const nameMatches = liveRoles.filter((role) => role.name === snapshot.name);
+    const matching = exact ?? (nameMatches.length === 1 ? nameMatches[0] : undefined);
     if (matching) {
-      roleIdByKey.set(matching.key, role.id);
+      roleIdByKey.set(snapshot.key, matching.id);
     }
   }
 
-  for (const channel of await guild.channels.fetch().then((channels) => [...channels.values()])) {
-    if (!channel) {
-      continue;
-    }
-    const matching = desired.channels.find((snapshot) => snapshot.id === channel.id || snapshot.name === channel.name);
+  for (const snapshot of desired.channels) {
+    const exact = liveChannels.find((channel) => channel.id === snapshot.id);
+    const nameMatches = liveChannels.filter(
+      (channel) => channel.name === snapshot.name && channel.type === snapshot.type,
+    );
+    const matching = exact ?? (nameMatches.length === 1 ? nameMatches[0] : undefined);
     if (matching) {
-      channelIdByKey.set(matching.key, channel.id);
+      channelIdByKey.set(snapshot.key, matching.id);
     }
   }
 
@@ -386,7 +372,14 @@ async function applyRestoreOperations(
   ];
 
   for (const operation of sortedChannelOperations) {
-    const result = await applyChannelOperation(guild, operation, channelIdByKey, options);
+    const result = await applyChannelOperation(
+      guild,
+      operation,
+      channelIdByKey,
+      roleIdByKey,
+      desired.guild.id !== guild.id,
+      options,
+    );
     (result.applied ? applied : skipped).push(result.detail);
     if (result.key && result.id) {
       channelIdByKey.set(result.key, result.id);
@@ -435,6 +428,7 @@ async function applyRoleOperation(
     hoist: desiredRole.hoist,
     mentionable: desiredRole.mentionable,
     permissions: new PermissionsBitField(BigInt(desiredRole.permissions)),
+    position: desiredRole.position,
     reason: options.reason,
   };
 
@@ -458,6 +452,8 @@ async function applyChannelOperation(
   guild: Guild,
   operation: RestoreOperation,
   channelIdByKey: Map<string, string>,
+  roleIdByKey: Map<string, string>,
+  crossGuild: boolean,
   options: { includeDeletes: boolean; reason: string },
 ): Promise<{ applied: boolean; detail: unknown; key?: string; id?: string }> {
   if (operation.type === "skip") {
@@ -488,28 +484,108 @@ async function applyChannelOperation(
     return { applied: false, detail: { ...operation, reason: "missing desired channel payload" } };
   }
 
-  const parent = desiredChannel.parentKey ? channelIdByKey.get(desiredChannel.parentKey) : undefined;
+  const parent = desiredChannel.parentKey === null
+    ? null
+    : channelIdByKey.get(desiredChannel.parentKey);
+
+  if (desiredChannel.parentKey !== null && parent === undefined) {
+    return {
+      applied: false,
+      detail: { ...operation, reason: `parent channel could not be resolved: ${desiredChannel.parentKey}` },
+    };
+  }
+
+  const restoredOverwrites = restorePermissionOverwrites(
+    desiredChannel.permissionOverwrites,
+    roleIdByKey,
+    crossGuild,
+  );
+  const preserveExistingOverwrites =
+    operation.type === "update" && restoredOverwrites.warnings.length > 0;
+
+  if (preserveExistingOverwrites) {
+    restoredOverwrites.warnings.push(
+      "Permission overwrites were left unchanged because a partial replacement would remove unmapped targets.",
+    );
+  }
+
   const channelOptions: Record<string, unknown> = {
     name: desiredChannel.name,
-    type: desiredChannel.type as ChannelType,
     parent,
+    position: desiredChannel.position,
     topic: desiredChannel.topic ?? undefined,
     nsfw: desiredChannel.nsfw,
     rateLimitPerUser: desiredChannel.rateLimitPerUser ?? undefined,
+    permissionOverwrites: preserveExistingOverwrites ? undefined : restoredOverwrites.values,
     reason: options.reason,
   };
+  const detail = restoredOverwrites.warnings.length === 0
+    ? operation
+    : { ...operation, warnings: restoredOverwrites.warnings };
 
   if (operation.type === "create" || !channel) {
+    channelOptions.type = desiredChannel.type as ChannelType;
     const created = await guild.channels.create(channelOptions as unknown as Parameters<typeof guild.channels.create>[0]);
-    return { applied: true, detail: operation, key: desiredChannel.key, id: created.id };
+    return { applied: true, detail, key: desiredChannel.key, id: created.id };
   }
 
   if (!("edit" in channel) || typeof channel.edit !== "function") {
     return { applied: false, detail: { ...operation, reason: "channel cannot be edited" } };
   }
 
+  if (channel.type !== desiredChannel.type) {
+    const convertibleTypes = new Set([ChannelType.GuildText, ChannelType.GuildAnnouncement]);
+    if (!convertibleTypes.has(channel.type) || !convertibleTypes.has(desiredChannel.type)) {
+      return {
+        applied: false,
+        detail: { ...operation, reason: "channel type change is not supported by Discord" },
+      };
+    }
+    channelOptions.type = desiredChannel.type;
+  }
+
   const updated = await channel.edit(channelOptions as Parameters<typeof channel.edit>[0]);
-  return { applied: true, detail: operation, key: desiredChannel.key, id: updated.id };
+  return { applied: true, detail, key: desiredChannel.key, id: updated.id };
+}
+
+function restorePermissionOverwrites(
+  overwrites: PermissionOverwriteSnapshot[],
+  roleIdByKey: Map<string, string>,
+  crossGuild: boolean,
+): {
+  values: Array<{ id: string; type: OverwriteType; allow: PermissionsBitField; deny: PermissionsBitField }>;
+  warnings: string[];
+} {
+  const values: Array<{
+    id: string;
+    type: OverwriteType;
+    allow: PermissionsBitField;
+    deny: PermissionsBitField;
+  }> = [];
+  const warnings: string[] = [];
+
+  for (const overwrite of overwrites) {
+    const mappedRoleId = overwrite.targetKey ? roleIdByKey.get(overwrite.targetKey) : undefined;
+    const targetId = overwrite.type === "role"
+      ? (mappedRoleId ?? (crossGuild ? undefined : overwrite.id))
+      : (crossGuild ? undefined : overwrite.id);
+
+    if (!targetId) {
+      warnings.push(
+        `Skipped ${overwrite.type} permission overwrite ${overwrite.id}: target cannot be mapped across guilds.`,
+      );
+      continue;
+    }
+
+    values.push({
+      id: targetId,
+      type: overwrite.type === "role" ? OverwriteType.Role : OverwriteType.Member,
+      allow: new PermissionsBitField(BigInt(overwrite.allow)),
+      deny: new PermissionsBitField(BigInt(overwrite.deny)),
+    });
+  }
+
+  return { values, warnings };
 }
 
 function asRoleSnapshot(value: unknown): RoleSnapshot {
@@ -542,6 +618,13 @@ function countsSchema() {
     stickers: z.number(),
     applicationCommands: z.number(),
   });
+}
+
+function snapshotWarningsSchema() {
+  return z.array(z.object({
+    section: z.string(),
+    message: z.string(),
+  }));
 }
 
 function summarySchema() {

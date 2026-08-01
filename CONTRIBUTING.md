@@ -7,10 +7,12 @@ Maintainer: [Michael Gasperini](https://mikesoft.it) / [TheStreamCode](https://g
 ## Local Development
 
 ```bash
-npm install
+npm ci
+npm run lint
 npm run typecheck
 npm test
 npm run build
+npm run pack:check
 ```
 
 Use Node.js `>=24`. Do not commit `node_modules/`, `dist/`, `.env.local`, backups, or logs.
@@ -28,10 +30,10 @@ Use Node.js `>=24`. Do not commit `node_modules/`, `dist/`, `.env.local`, backup
 
 - New tools have clear names and descriptions.
 - Inputs use Zod validation with useful bounds.
-- Mutating tools use confirmation guards.
-- Destructive tools use backup guards.
+- Mutating tools use confirmation guards and accurate MCP annotations.
+- Delete and other high-impact destructive tools use backup guards.
 - Error responses include actionable next steps.
 - Tests cover safety-critical behavior.
-- `npm run typecheck`, `npm test`, and `npm run build` pass.
+- `npm run preflight` and `npm run pack:check` pass.
 
 All changes should be submitted through pull requests. Direct pushes to the protected default branch are reserved for the maintainer bypass path.

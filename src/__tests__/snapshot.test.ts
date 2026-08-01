@@ -98,7 +98,24 @@ describe("backup snapshot", () => {
       invites: [{ code: "abc", uses: 1 }],
     });
     expect(snapshot.channels[1]?.permissionOverwrites).toEqual([
-      { id: "role-1", type: "role", allow: "1024", deny: "0" },
+      {
+        id: "role-1",
+        type: "role",
+        targetKey: "role:member:2:role-1",
+        allow: "1024",
+        deny: "0",
+      },
     ]);
+  });
+
+  test("rejects incomplete backups when a required role or channel fetch fails", async () => {
+    const guild = {
+      roles: { fetch: async () => { throw new Error("missing Manage Roles"); } },
+      channels: { fetch: async () => collection([]) },
+    };
+
+    await expect(createSnapshot(guild as never)).rejects.toThrow(
+      "Failed to capture required snapshot section roles",
+    );
   });
 });

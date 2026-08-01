@@ -53,6 +53,7 @@ export interface RoleSnapshot {
 export interface PermissionOverwriteSnapshot {
   id: string;
   type: "role" | "member";
+  targetKey?: string;
   allow: string;
   deny: string;
 }

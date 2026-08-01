@@ -61,6 +61,27 @@ describe("backup store", () => {
     }
   });
 
+  test("does not overwrite an existing backup when IDs collide", async () => {
+    const backupDir = await mkdtemp(join(tmpdir(), "discord-backups-"));
+    const capturedAt = "2026-05-29T12:00:00.000Z";
+    const original = snapshot({ capturedAt });
+
+    try {
+      const backupId = await writeSnapshot(backupDir, original, new Date(capturedAt));
+
+      await expect(
+        writeSnapshot(
+          backupDir,
+          snapshot({ capturedAt, guild: { ...original.guild, name: "Replacement" } }),
+          new Date(capturedAt),
+        ),
+      ).rejects.toMatchObject({ code: "EEXIST" });
+      await expect(readSnapshot(backupDir, backupId)).resolves.toEqual(original);
+    } finally {
+      await rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
   test("rejects invalid backup ids before filesystem access", async () => {
     expect(() => validateBackupId("../backup.json")).toThrow("Invalid backupId");
     expect(() => validateBackupId("backup.json")).toThrow("Invalid backupId");
@@ -79,6 +100,26 @@ describe("backup store", () => {
 
       await expect(readSnapshot(backupDir, invalidId)).rejects.toThrow(
         "Unsupported backup schema version",
+      );
+    } finally {
+      await rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects malformed snapshot resources before restore code can use them", async () => {
+    const backupDir = await mkdtemp(join(tmpdir(), "discord-backups-"));
+    const invalidId = "2026-05-29T12-34-56-000Z-guild.json";
+
+    try {
+      await ensureBackupDir(backupDir);
+      await writeFile(
+        join(backupDir, invalidId),
+        JSON.stringify({ ...snapshot(), roles: [{ id: "role-without-required-fields" }] }),
+        "utf8",
+      );
+
+      await expect(readSnapshot(backupDir, invalidId)).rejects.toThrow(
+        "Invalid backup snapshot at roles.0",
       );
     } finally {
       await rm(backupDir, { recursive: true, force: true });

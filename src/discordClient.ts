@@ -2,8 +2,8 @@ import {
   Client,
   Events,
   GatewayIntentBits,
-  Guild,
   Partials,
+  type Guild,
 } from "discord.js";
 
 export type DiscordClientOptions = {
@@ -26,47 +26,57 @@ export class DiscordClientManager {
     }
 
     if (!this.ready) {
-      const intents = [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.GuildMessageReactions,
-        GatewayIntentBits.GuildModeration,
-        GatewayIntentBits.GuildScheduledEvents,
-      ];
-
-      if (this.options.enableMessageContent === true) {
-        intents.push(GatewayIntentBits.MessageContent);
-      }
-
-      if (this.options.enableGuildMembers === true) {
-        intents.push(GatewayIntentBits.GuildMembers);
-      }
-
-      this.client = new Client({
-        intents,
-        partials: [Partials.Channel, Partials.Message, Partials.Reaction],
-      });
-
-      this.ready = new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error("Discord client login timed out."));
-        }, 30_000);
-
-        this.client?.once(Events.ClientReady, () => {
-          clearTimeout(timeout);
-          resolve(this.client!);
-        });
-
-        this.client?.once("error", (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        });
-      });
-
-      await this.client.login(this.token);
+      this.ready = this.connectClient();
     }
 
     return this.ready;
+  }
+
+  private async connectClient(): Promise<Client> {
+    const intents = [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.GuildMessageReactions,
+      GatewayIntentBits.GuildModeration,
+      GatewayIntentBits.GuildScheduledEvents,
+    ];
+
+    if (this.options.enableMessageContent === true) {
+      intents.push(GatewayIntentBits.MessageContent);
+    }
+
+    if (this.options.enableGuildMembers === true) {
+      intents.push(GatewayIntentBits.GuildMembers);
+    }
+
+    const client = new Client({
+      intents,
+      partials: [Partials.Channel, Partials.Message, Partials.Reaction],
+    });
+    this.client = client;
+
+    let timeout: NodeJS.Timeout | undefined;
+    const ready = new Promise<Client>((resolve, reject) => {
+      timeout = setTimeout(() => reject(new Error("Discord client login timed out.")), 30_000);
+      client.once(Events.ClientReady, () => resolve(client));
+      client.once(Events.Error, reject);
+    });
+
+    try {
+      await Promise.race([ready, client.login(this.token).then(() => ready)]);
+      return client;
+    } catch (error) {
+      client.destroy();
+      if (this.client === client) {
+        this.client = undefined;
+        this.ready = undefined;
+      }
+      throw error;
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   }
 
   async getGuild(guildId: string): Promise<Guild> {

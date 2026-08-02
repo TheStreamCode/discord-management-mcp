@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
-## 0.1.1 - 2026-08-01
+## 0.1.1 - 2026-08-02
 
 ### Changed
 
@@ -16,6 +16,8 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Backup tools now declare both success and failure output shapes, preventing MCP clients from replacing
+  structured application errors with an output-schema validation failure.
 - `SECURITY.md` no longer states that tagged releases have not been introduced; supported versions now
   reference the published `0.1.x` line.
 

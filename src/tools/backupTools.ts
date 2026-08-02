@@ -38,13 +38,16 @@ export function registerBackupTools(
       inputSchema: {
         guildId: z.string().min(1).describe("Discord guild ID to snapshot."),
       },
-      outputSchema: {
-        backupId: z.string(),
-        guildId: z.string(),
-        capturedAt: z.string(),
-        counts: countsSchema(),
-        warnings: snapshotWarningsSchema(),
-      },
+      outputSchema: z.union([
+        z.object({
+          backupId: z.string(),
+          guildId: z.string(),
+          capturedAt: z.string(),
+          counts: countsSchema(),
+          warnings: snapshotWarningsSchema(),
+        }),
+        errorOutputSchema(),
+      ]),
       annotations: additiveDiscordAnnotations,
     },
     async ({ guildId }) => {
@@ -74,10 +77,13 @@ export function registerBackupTools(
       title: "List Discord Backups",
       description: "List stored Discord backup snapshot IDs, newest first.",
       inputSchema: {},
-      outputSchema: {
-        backupIds: z.array(z.string()),
-        count: z.number(),
-      },
+      outputSchema: z.union([
+        z.object({
+          backupIds: z.array(z.string()),
+          count: z.number(),
+        }),
+        errorOutputSchema(),
+      ]),
       annotations: localReadOnlyAnnotations,
     },
     async () => {
@@ -104,12 +110,15 @@ export function registerBackupTools(
       inputSchema: {
         backupId: z.string().min(1).describe("Backup file ID returned by discord_backup_list or create."),
       },
-      outputSchema: {
-        backupId: z.string(),
-        snapshot: z.unknown(),
-        counts: countsSchema(),
-        warnings: snapshotWarningsSchema(),
-      },
+      outputSchema: z.union([
+        z.object({
+          backupId: z.string(),
+          snapshot: z.unknown(),
+          counts: countsSchema(),
+          warnings: snapshotWarningsSchema(),
+        }),
+        errorOutputSchema({ backupId: z.string() }),
+      ]),
       annotations: localReadOnlyAnnotations,
     },
     async ({ backupId }) => {
@@ -140,12 +149,18 @@ export function registerBackupTools(
         beforeBackupId: z.string().min(1).describe("Older or source backup ID."),
         afterBackupId: z.string().min(1).describe("Newer or target backup ID."),
       },
-      outputSchema: {
-        beforeBackupId: z.string(),
-        afterBackupId: z.string(),
-        operations: z.array(z.unknown()),
-        summary: summarySchema(),
-      },
+      outputSchema: z.union([
+        z.object({
+          beforeBackupId: z.string(),
+          afterBackupId: z.string(),
+          operations: z.array(z.unknown()),
+          summary: summarySchema(),
+        }),
+        errorOutputSchema({
+          beforeBackupId: z.string(),
+          afterBackupId: z.string(),
+        }),
+      ]),
       annotations: localReadOnlyAnnotations,
     },
     async ({ beforeBackupId, afterBackupId }) => {
@@ -180,11 +195,17 @@ export function registerBackupTools(
         backupId: z.string().min(1).describe("Backup snapshot to restore toward."),
         targetGuildId: z.string().min(1).describe("Live Discord guild ID to compare against the backup."),
       },
-      outputSchema: {
-        plan: z.unknown(),
-        summary: summarySchema(),
-        safetyMessage: z.string(),
-      },
+      outputSchema: z.union([
+        z.object({
+          plan: z.unknown(),
+          summary: summarySchema(),
+          safetyMessage: z.string(),
+        }),
+        errorOutputSchema({
+          backupId: z.string(),
+          targetGuildId: z.string(),
+        }),
+      ]),
       annotations: readOnlyDiscordAnnotations,
     },
     async ({ backupId, targetGuildId }) => {
@@ -237,14 +258,20 @@ export function registerBackupTools(
         includeDeletes: z.boolean().optional(),
         allowCrossGuild: z.boolean().optional(),
       },
-      outputSchema: {
-        preRestoreBackupId: z.string(),
-        sourceBackupId: z.string(),
-        targetGuildId: z.string(),
-        applied: z.array(z.unknown()),
-        skipped: z.array(z.unknown()),
-        warnings: z.array(z.unknown()),
-      },
+      outputSchema: z.union([
+        z.object({
+          preRestoreBackupId: z.string(),
+          sourceBackupId: z.string(),
+          targetGuildId: z.string(),
+          applied: z.array(z.unknown()),
+          skipped: z.array(z.unknown()),
+          warnings: z.array(z.unknown()),
+        }),
+        errorOutputSchema({
+          backupId: z.string(),
+          targetGuildId: z.string(),
+        }),
+      ]),
       annotations: destructiveDiscordAnnotations,
     },
     async (input) => {
@@ -634,6 +661,13 @@ function summarySchema() {
     delete: z.number(),
     skip: z.number(),
     total: z.number(),
+  });
+}
+
+function errorOutputSchema<TShape extends z.ZodRawShape>(shape?: TShape) {
+  return z.object({
+    ...shape,
+    error: z.string(),
   });
 }
 

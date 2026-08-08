@@ -8,6 +8,7 @@ import {
 import { z } from "zod";
 import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
+import { safeErrorMessage } from "../errors.js";
 import { errorResponse, successResponse } from "../responses.js";
 import { requireConfirmation, requireDestructiveBackupForGuild } from "../safety.js";
 import {
@@ -15,10 +16,18 @@ import {
   destructiveDiscordAnnotations,
   idempotentDiscordMutationAnnotations,
 } from "../toolAnnotations.js";
+import { defaultOutputToolRegistrar } from "../toolRegistration.js";
+import {
+  auditReasonSchema,
+  backupIdInputSchema,
+  discordSnowflakeSchema,
+  requireAtLeastOneInputField,
+  requireUniqueValues,
+} from "../toolSchemas.js";
 
 const confirmSchema = {
   confirm: z.boolean().optional(),
-  reason: z.string().min(1).optional(),
+  reason: auditReasonSchema,
 };
 
 const roleMutationResultSchema = {
@@ -91,18 +100,20 @@ export function registerRoleTools(
   discord: DiscordClientManager,
   config: ServerConfig,
 ): void {
-  server.registerTool(
+  const registerTool = defaultOutputToolRegistrar(server);
+
+  registerTool(
     "discord_create_role",
     {
       title: "Create Discord role",
       description: "Create a Discord role.",
       inputSchema: {
-        guildId: z.string(),
-        name: z.string().min(1),
+        guildId: discordSnowflakeSchema,
+        name: z.string().trim().min(1).max(100),
         color: z.number().int().min(0).max(0xffffff).optional(),
         hoist: z.boolean().optional(),
         mentionable: z.boolean().optional(),
-        permissions: z.array(z.string()).optional(),
+        permissions: z.array(z.string().min(1).max(100)).max(100).optional(),
         ...confirmSchema,
       },
       outputSchema: roleMutationResultSchema,
@@ -135,25 +146,25 @@ export function registerRoleTools(
           ok: false,
           action: "discord_create_role",
           guildId: input.guildId,
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error),
         });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_update_role",
     {
       title: "Update Discord role",
       description: "Update editable Discord role fields.",
       inputSchema: {
-        guildId: z.string(),
-        roleId: z.string(),
-        name: z.string().min(1).optional(),
+        guildId: discordSnowflakeSchema,
+        roleId: discordSnowflakeSchema,
+        name: z.string().trim().min(1).max(100).optional(),
         color: z.number().int().min(0).max(0xffffff).optional(),
         hoist: z.boolean().optional(),
         mentionable: z.boolean().optional(),
-        permissions: z.array(z.string()).optional(),
+        permissions: z.array(z.string().min(1).max(100)).max(100).optional(),
         ...confirmSchema,
       },
       outputSchema: roleMutationResultSchema,
@@ -162,6 +173,7 @@ export function registerRoleTools(
     async (input) => {
       try {
         requireConfirmation(input);
+        requireAtLeastOneInputField(input, ["name", "color", "hoist", "mentionable", "permissions"]);
         validatePermissionNames(input.permissions);
         const role = await getEditableRole(discord, input.guildId, input.roleId);
         const updates = compactObject({
@@ -194,21 +206,21 @@ export function registerRoleTools(
           action: "discord_update_role",
           guildId: input.guildId,
           roleId: input.roleId,
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error),
         });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_delete_role",
     {
       title: "Delete Discord role",
       description: "Delete a Discord role after confirmation and backup acknowledgement.",
       inputSchema: {
-        guildId: z.string(),
-        roleId: z.string(),
-        backupId: z.string().nullable().optional(),
+        guildId: discordSnowflakeSchema,
+        roleId: discordSnowflakeSchema,
+        backupId: backupIdInputSchema.nullable().optional(),
         allowWithoutBackup: z.boolean().optional(),
         ...confirmSchema,
       },
@@ -236,21 +248,21 @@ export function registerRoleTools(
           action: "discord_delete_role",
           guildId: input.guildId,
           roleId: input.roleId,
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error),
         });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_assign_role",
     {
       title: "Assign Discord role",
       description: "Assign a role to a guild member.",
       inputSchema: {
-        guildId: z.string(),
-        userId: z.string(),
-        roleId: z.string(),
+        guildId: discordSnowflakeSchema,
+        userId: discordSnowflakeSchema,
+        roleId: discordSnowflakeSchema,
         ...confirmSchema,
       },
       outputSchema: roleMutationResultSchema,
@@ -279,21 +291,21 @@ export function registerRoleTools(
           guildId: input.guildId,
           roleId: input.roleId,
           userId: input.userId,
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error),
         });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_remove_role",
     {
       title: "Remove Discord role",
       description: "Remove a role from a guild member.",
       inputSchema: {
-        guildId: z.string(),
-        userId: z.string(),
-        roleId: z.string(),
+        guildId: discordSnowflakeSchema,
+        userId: discordSnowflakeSchema,
+        roleId: discordSnowflakeSchema,
         ...confirmSchema,
       },
       outputSchema: roleMutationResultSchema,
@@ -322,20 +334,20 @@ export function registerRoleTools(
           guildId: input.guildId,
           roleId: input.roleId,
           userId: input.userId,
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error),
         });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_reorder_roles",
     {
       title: "Reorder Discord roles",
       description: "Set role positions within a guild.",
       inputSchema: {
-        guildId: z.string(),
-        positions: z.array(z.object({ roleId: z.string(), position: z.number().int().min(0) })).min(1),
+        guildId: discordSnowflakeSchema,
+        positions: z.array(z.object({ roleId: discordSnowflakeSchema, position: z.number().int().min(0).max(249) })).min(1).max(250),
         ...confirmSchema,
       },
       outputSchema: roleMutationResultSchema,
@@ -344,6 +356,7 @@ export function registerRoleTools(
     async (input) => {
       try {
         requireConfirmation(input);
+        requireUniqueValues(input.positions.map(({ roleId }) => roleId), "positions.roleId");
         await requireManageRoles(discord, input.guildId);
         const guild = await discord.getGuild(input.guildId);
         const roles = await Promise.all(
@@ -373,7 +386,7 @@ export function registerRoleTools(
           action: "discord_reorder_roles",
           guildId: input.guildId,
           positions: input.positions,
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error),
         });
       }
     },

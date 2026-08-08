@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.1.2 - 2026-08-08
+
+### Security
+
+- Removed invite codes and URLs from tool responses and snapshots, recursively sanitize legacy backup data, redact secrets from surfaced errors, keep full backup payloads local, and reject symbolic-link, oversized, deeply nested, or structurally invalid backup input.
+- Updated audited transitive dependencies in the lockfile and grouped Dependabot security updates to prevent advisory PR deadlocks.
+
+### Fixed
+
+- All 47 MCP tools now advertise a root-object output schema with a consistent `ok` field; backup schemas are no longer silently omitted by the protocol SDK.
+- Restore apply now stops on the first failed mutation while retaining the pre-restore backup ID and reporting applied, skipped, and failed operations truthfully.
+- Mutation inputs now use bounded Discord IDs, reasons, arrays, and payloads; invalid enum values, duplicate reorder/message IDs, ambiguous bulk-delete requests, and no-op updates fail before contacting Discord.
+
+### Changed
+
+- Reworked the README around a package-first quick start, an explicit safety architecture, a sanitized operator workflow, capability discovery, and clearer support paths.
+- Added optimized wide project artwork and a dedicated GitHub social-preview asset while preserving the previous hero image for historical continuity.
+
 ## 0.1.1 - 2026-08-02
 
 ### Changed

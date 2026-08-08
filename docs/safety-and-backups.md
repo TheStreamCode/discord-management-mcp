@@ -49,6 +49,10 @@ Restore is best-effort. Discord does not allow full restoration of:
 
 `discord_backup_restore_apply` creates a pre-restore backup first and only applies conservative role/channel create and update operations by default; deletes remain opt-in.
 
+Restore stops on the first Discord operation error. Its error response retains the pre-restore backup ID and truthfully reports operations already applied, operations skipped, and the failed operation so operators can assess the partial state before retrying.
+
 Role and channel identity is matched by Discord ID first and by an unambiguous semantic match when cloning across guilds. Restore applies supported positions, parents, and permission overwrites; targets that cannot be mapped safely are reported and left unchanged rather than partially replacing permissions.
 
 Role and channel capture is mandatory. If either core section cannot be read, backup creation fails closed instead of writing a partial snapshot that could provide a false sense of rollback safety. Optional sections remain best-effort and produce structured warnings.
+
+Backup files are treated as untrusted local input. Reads reject symbolic links, oversized files, excessive JSON depth or container sizes, malformed resources, and paths not issued by the backup tools. New and legacy snapshots are recursively sanitized before use: invite codes/URLs, webhook tokens/URLs, authorization fields, and other token or secret fields are removed.

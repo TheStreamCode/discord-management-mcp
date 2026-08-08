@@ -26,7 +26,8 @@ Before creating a release:
 
 The package name is `discord-management-mcp` and publication is configured for the public npm registry.
 Version `0.1.0` was published on 2026-08-01 with npm provenance, bootstrapped by a granular automation
-token stored as the `NPM_TOKEN` repository secret.
+token stored as the `NPM_TOKEN` repository secret. Patch releases continue to use that workflow until
+Trusted Publishing is independently confirmed on npmjs.com.
 
 The workflow grants `id-token: write`, runs on a GitHub-hosted runner, verifies source and release
 metadata, and publishes with npm provenance.
@@ -62,8 +63,9 @@ Keep the following settings enabled:
 Recommended repository metadata:
 
 - Description: `Safe-by-default Discord management MCP server with JSON backups, restore planning, and guarded mutations.`
-- Website: `https://mikesoft.it`
-- Topics: `mcp`, `discord`, `discord-bot`, `discord-management`, `model-context-protocol`, `backup`, `rollback`
+- Website: `https://www.npmjs.com/package/discord-management-mcp` until a dedicated project page exists
+- Topics: `mcp`, `mcp-server`, `model-context-protocol`, `discord`, `discord-js`, `discord-bot`, `discord-management`, `typescript`, `nodejs`, `ai-agents`, `backup`, `rollback`
+- Social preview: use `assets/github-social-preview.png` from the matching release source tree
 
 Do not publish bot tokens, webhook URLs, invite secrets, backup files, or screenshots that expose private guild details.
 

@@ -77,7 +77,7 @@ describe("backup snapshot", () => {
       fetchWebhooks: async () => {
         throw new Error("missing permission");
       },
-      invites: { fetch: async () => collection([{ code: "abc", uses: 1 }]) },
+      invites: { fetch: async () => collection([{ code: "abc", url: "https://discord.gg/abc", uses: 1 }]) },
       emojis: { fetch: async () => collection([]) },
       stickers: { fetch: async () => collection([]) },
       commands: { fetch: async () => collection([]) },
@@ -95,8 +95,10 @@ describe("backup snapshot", () => {
         { key: "channel:general-chat:1:chan-1", id: "chan-1", parentKey: "category:public:0:cat-1" },
       ],
       webhooks: [],
-      invites: [{ code: "abc", uses: 1 }],
+      invites: [{ uses: 1 }],
     });
+    expect(JSON.stringify(snapshot)).not.toContain("abc");
+    expect(JSON.stringify(snapshot)).not.toContain("discord.gg");
     expect(snapshot.channels[1]?.permissionOverwrites).toEqual([
       {
         id: "role-1",

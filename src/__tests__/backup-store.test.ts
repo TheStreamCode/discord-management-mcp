@@ -125,4 +125,69 @@ describe("backup store", () => {
       await rm(backupDir, { recursive: true, force: true });
     }
   });
+
+  test("removes secret fields from legacy snapshots on read", async () => {
+    const backupDir = await mkdtemp(join(tmpdir(), "discord-backups-"));
+    const backupId = "2026-05-29T12-34-56-000Z-guild.json";
+
+    try {
+      await ensureBackupDir(backupDir);
+      await writeFile(join(backupDir, backupId), JSON.stringify(snapshot({
+        invites: [{ code: "invite-secret", url: "https://discord.gg/secret", uses: 1 }],
+        webhooks: [{ id: "123", token: "webhook-secret", url: "https://discord.com/api/webhooks/123/secret" }],
+      })), "utf8");
+
+      const restored = await readSnapshot(backupDir, backupId);
+      expect(restored.invites).toEqual([{ uses: 1 }]);
+      expect(restored.webhooks).toEqual([{ id: "123" }]);
+    } finally {
+      await rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects oversized backup files before parsing", async () => {
+    const backupDir = await mkdtemp(join(tmpdir(), "discord-backups-"));
+    const backupId = "2026-05-29T12-34-56-000Z-guild.json";
+
+    try {
+      await ensureBackupDir(backupDir);
+      await writeFile(join(backupDir, backupId), " ".repeat(16 * 1024 * 1024 + 1), "utf8");
+
+      await expect(readSnapshot(backupDir, backupId)).rejects.toThrow("size limit");
+    } finally {
+      await rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects excessive JSON nesting before schema traversal", async () => {
+    const backupDir = await mkdtemp(join(tmpdir(), "discord-backups-"));
+    const backupId = "2026-05-29T12-34-56-000Z-guild.json";
+    let nested: Record<string, unknown> = {};
+    for (let depth = 0; depth < 40; depth += 1) {
+      nested = { nested };
+    }
+
+    try {
+      await ensureBackupDir(backupDir);
+      await writeFile(join(backupDir, backupId), JSON.stringify({
+        ...snapshot(),
+        autoModRules: [{
+          key: "rule:one",
+          id: "rule-1",
+          name: "Rule",
+          enabled: true,
+          eventType: 1,
+          triggerType: 1,
+          triggerMetadata: nested,
+          actions: [],
+          exemptRoleKeys: [],
+          exemptChannelKeys: [],
+        }],
+      }), "utf8");
+
+      await expect(readSnapshot(backupDir, backupId)).rejects.toThrow("JSON depth");
+    } finally {
+      await rm(backupDir, { recursive: true, force: true });
+    }
+  });
 });

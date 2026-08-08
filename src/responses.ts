@@ -7,7 +7,7 @@ export type McpTextContent = {
 
 export type McpResponse<TStructuredContent extends JsonObject> = {
   content: McpTextContent[];
-  structuredContent: TStructuredContent;
+  structuredContent: TStructuredContent & { ok: boolean };
   isError?: true;
 };
 
@@ -17,7 +17,7 @@ export function successResponse<TStructuredContent extends JsonObject>(
 ): McpResponse<TStructuredContent> {
   return {
     content: [{ type: "text", text }],
-    structuredContent,
+    structuredContent: { ...structuredContent, ok: true },
   };
 }
 
@@ -27,7 +27,7 @@ export function errorResponse<TStructuredContent extends JsonObject>(
 ): McpResponse<TStructuredContent> {
   return {
     content: [{ type: "text", text }],
-    structuredContent,
+    structuredContent: { ...structuredContent, ok: false },
     isError: true,
   };
 }

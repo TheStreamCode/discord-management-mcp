@@ -73,3 +73,7 @@ All tools use the `discord_` prefix.
 - Mutating tools require `confirm: true` and `reason`.
 - Delete and other high-impact destructive tools require `backupId` or `allowWithoutBackup: true`.
 - Backup IDs are validated and destructive guild-targeted actions reject backups from another guild.
+- `discord_backup_read` validates a local snapshot and returns only metadata, counts, and warnings; the full backup payload is never returned to the MCP client.
+- Invite list/create results never return invite codes or URLs; webhook creation never returns its token-bearing URL.
+- Every tool advertises a root-object MCP output schema with an `ok` status; errors retain actionable structured details.
+- Update tools reject no-op requests, Discord IDs are bounded snowflakes, and enum inputs must name or equal a real Discord enum member.

@@ -8,6 +8,7 @@ import {
 import { z } from "zod";
 import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
+import { safeErrorMessage } from "../errors.js";
 import { errorResponse, successResponse } from "../responses.js";
 import { requireConfirmation, requireDestructiveBackupForGuild } from "../safety.js";
 import {
@@ -15,6 +16,14 @@ import {
   destructiveDiscordAnnotations,
   idempotentDiscordMutationAnnotations,
 } from "../toolAnnotations.js";
+import { defaultOutputToolRegistrar } from "../toolRegistration.js";
+import {
+  auditReasonSchema,
+  backupIdInputSchema,
+  discordSnowflakeSchema,
+  requireAtLeastOneInputField,
+  requireUniqueValues,
+} from "../toolSchemas.js";
 
 const channelTypeByName = {
   text: ChannelType.GuildText,
@@ -26,7 +35,7 @@ const channelTypeByName = {
 
 const confirmSchema = {
   confirm: z.boolean().optional(),
-  reason: z.string().min(1).optional(),
+  reason: auditReasonSchema,
 };
 
 const channelMutationResultSchema = {
@@ -103,21 +112,23 @@ export function registerChannelTools(
   discord: DiscordClientManager,
   config: ServerConfig,
 ): void {
-  server.registerTool(
+  const registerTool = defaultOutputToolRegistrar(server);
+
+  registerTool(
     "discord_create_channel",
     {
       title: "Create Discord channel",
       description: "Create a text, voice, category, forum, or stage channel.",
       inputSchema: {
-        guildId: z.string(),
-        name: z.string().min(1),
+        guildId: discordSnowflakeSchema,
+        name: z.string().trim().min(1).max(100),
         type: z.enum(["text", "voice", "category", "forum", "stage"]),
-        parentId: z.string().optional(),
-        topic: z.string().optional(),
+        parentId: discordSnowflakeSchema.optional(),
+        topic: z.string().max(4_096).optional(),
         nsfw: z.boolean().optional(),
-        rateLimitPerUser: z.number().int().min(0).optional(),
-        userLimit: z.number().int().min(0).optional(),
-        bitrate: z.number().int().min(8000).optional(),
+        rateLimitPerUser: z.number().int().min(0).max(21_600).optional(),
+        userLimit: z.number().int().min(0).max(99).optional(),
+        bitrate: z.number().int().min(8_000).max(384_000).optional(),
         ...confirmSchema,
       },
       outputSchema: channelMutationResultSchema,
@@ -151,24 +162,24 @@ export function registerChannelTools(
         return errorResponse("Failed to create channel.", {
           ok: false,
           action: "discord_create_channel",
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error),
         });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_update_channel",
     {
       title: "Update Discord channel",
       description: "Update editable properties on a Discord guild channel.",
       inputSchema: {
-        channelId: z.string(),
-        name: z.string().min(1).optional(),
-        topic: z.string().nullable().optional(),
+        channelId: discordSnowflakeSchema,
+        name: z.string().trim().min(1).max(100).optional(),
+        topic: z.string().max(4_096).nullable().optional(),
         nsfw: z.boolean().optional(),
-        rateLimitPerUser: z.number().int().min(0).optional(),
-        parentId: z.string().nullable().optional(),
+        rateLimitPerUser: z.number().int().min(0).max(21_600).optional(),
+        parentId: discordSnowflakeSchema.nullable().optional(),
         ...confirmSchema,
       },
       outputSchema: channelMutationResultSchema,
@@ -177,6 +188,7 @@ export function registerChannelTools(
     async (input) => {
       try {
         requireConfirmation(input);
+        requireAtLeastOneInputField(input, ["name", "topic", "nsfw", "rateLimitPerUser", "parentId"]);
         const channel = await getEditableChannel(discord, input.channelId);
         const updates = compactObject({
           name: input.name,
@@ -201,20 +213,20 @@ export function registerChannelTools(
           ok: false,
           action: "discord_update_channel",
           channelId: input.channelId,
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error),
         });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_delete_channel",
     {
       title: "Delete Discord channel",
       description: "Delete a Discord guild channel after confirmation and backup acknowledgement.",
       inputSchema: {
-        channelId: z.string(),
-        backupId: z.string().nullable().optional(),
+        channelId: discordSnowflakeSchema,
+        backupId: backupIdInputSchema.nullable().optional(),
         allowWithoutBackup: z.boolean().optional(),
         ...confirmSchema,
       },
@@ -240,23 +252,23 @@ export function registerChannelTools(
           ok: false,
           action: "discord_delete_channel",
           channelId: input.channelId,
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error),
         });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_set_channel_permissions",
     {
       title: "Set Discord channel permissions",
       description: "Set explicit channel permission overwrites for a role or member.",
       inputSchema: {
-        channelId: z.string(),
-        targetId: z.string(),
+        channelId: discordSnowflakeSchema,
+        targetId: discordSnowflakeSchema,
         targetType: z.enum(["role", "member"]),
-        allow: z.array(z.string()),
-        deny: z.array(z.string()),
+        allow: z.array(z.string().min(1).max(100)).max(100),
+        deny: z.array(z.string().min(1).max(100)).max(100),
         ...confirmSchema,
       },
       outputSchema: channelMutationResultSchema,
@@ -304,20 +316,20 @@ export function registerChannelTools(
           channelId: input.channelId,
           targetId: input.targetId,
           targetType: input.targetType,
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error),
         });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_reorder_channels",
     {
       title: "Reorder Discord channels",
       description: "Set channel positions within a guild.",
       inputSchema: {
-        guildId: z.string(),
-        positions: z.array(z.object({ channelId: z.string(), position: z.number().int().min(0) })).min(1),
+        guildId: discordSnowflakeSchema,
+        positions: z.array(z.object({ channelId: discordSnowflakeSchema, position: z.number().int().min(0).max(499) })).min(1).max(500),
         ...confirmSchema,
       },
       outputSchema: channelMutationResultSchema,
@@ -326,6 +338,7 @@ export function registerChannelTools(
     async (input) => {
       try {
         requireConfirmation(input);
+        requireUniqueValues(input.positions.map(({ channelId }) => channelId), "positions.channelId");
         const guild = await discord.getGuild(input.guildId);
         const me = await guild.members.fetchMe();
         if (!me.permissions.has(PermissionFlagsBits.ManageChannels)) {
@@ -351,7 +364,7 @@ export function registerChannelTools(
           action: "discord_reorder_channels",
           guildId: input.guildId,
           positions: input.positions,
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error),
         });
       }
     },

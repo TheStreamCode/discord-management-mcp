@@ -8,6 +8,7 @@ import {
 import { z } from "zod";
 import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
+import { safeErrorMessage } from "../errors.js";
 import { errorResponse, successResponse } from "../responses.js";
 import { requireConfirmation, requireDestructiveBackupForGuild } from "../safety.js";
 import {
@@ -15,33 +16,16 @@ import {
   destructiveDiscordAnnotations,
   idempotentDiscordMutationAnnotations,
 } from "../toolAnnotations.js";
+import { defaultOutputToolRegistrar } from "../toolRegistration.js";
+import {
+  auditReasonSchema,
+  backupIdInputSchema,
+  discordSnowflakeSchema,
+  enumMember,
+  requireAtLeastOneInputField,
+} from "../toolSchemas.js";
 
-const optionalReason = z.string().min(1).max(512).optional();
-const snowflake = z.string().min(1);
 const enumInput = z.union([z.string(), z.number()]);
-
-type EnumLike = Record<string, string | number>;
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function enumValue<T extends string | number>(value: string | number, values: EnumLike, field: string): T {
-  if (typeof value === "number") {
-    return value as T;
-  }
-
-  if (value in values) {
-    return values[value] as T;
-  }
-
-  const numeric = Number(value);
-  if (Number.isInteger(numeric)) {
-    return numeric as T;
-  }
-
-  throw new Error(`Invalid ${field}: ${value}`);
-}
 
 function guildEditOptions(input: {
   name?: string;
@@ -58,17 +42,17 @@ function guildEditOptions(input: {
     description: input.description,
     verificationLevel: input.verificationLevel === undefined
       ? undefined
-      : enumValue<GuildVerificationLevel>(input.verificationLevel, GuildVerificationLevel, "verificationLevel"),
+      : enumMember<GuildVerificationLevel>(input.verificationLevel, GuildVerificationLevel, "verificationLevel"),
     explicitContentFilter: input.explicitContentFilter === undefined
       ? undefined
-      : enumValue<GuildExplicitContentFilter>(
+      : enumMember<GuildExplicitContentFilter>(
         input.explicitContentFilter,
         GuildExplicitContentFilter,
         "explicitContentFilter",
       ),
     defaultMessageNotifications: input.defaultMessageNotifications === undefined
       ? undefined
-      : enumValue<GuildDefaultMessageNotifications>(
+      : enumMember<GuildDefaultMessageNotifications>(
         input.defaultMessageNotifications,
         GuildDefaultMessageNotifications,
         "defaultMessageNotifications",
@@ -84,14 +68,16 @@ export function registerServerConfigTools(
   discord: DiscordClientManager,
   config: ServerConfig,
 ): void {
-  server.registerTool(
+  const registerTool = defaultOutputToolRegistrar(server);
+
+  registerTool(
     "discord_update_guild_settings",
     {
       title: "Update Discord guild settings",
       description: "Update basic guild settings such as name, description, moderation levels, locale, and AFK timeout.",
       annotations: idempotentDiscordMutationAnnotations,
       inputSchema: {
-        guildId: snowflake,
+        guildId: discordSnowflakeSchema,
         name: z.string().min(2).max(100).optional(),
         description: z.string().max(120).nullable().optional(),
         verificationLevel: enumInput.optional(),
@@ -100,12 +86,21 @@ export function registerServerConfigTools(
         preferredLocale: z.string().min(2).max(32).optional(),
         afkTimeout: z.number().int().positive().optional(),
         confirm: z.boolean().optional(),
-        reason: optionalReason,
+        reason: auditReasonSchema,
       },
     },
     async (input) => {
       try {
         requireConfirmation(input);
+        requireAtLeastOneInputField(input, [
+          "name",
+          "description",
+          "verificationLevel",
+          "explicitContentFilter",
+          "defaultMessageNotifications",
+          "preferredLocale",
+          "afkTimeout",
+        ]);
         const guild = await discord.getGuild(input.guildId);
         const updated = await guild.edit(guildEditOptions(input));
         return successResponse("Guild settings updated.", {
@@ -119,25 +114,25 @@ export function registerServerConfigTools(
           afkTimeout: updated.afkTimeout,
         });
       } catch (error) {
-        return errorResponse("Failed to update guild settings.", { error: errorMessage(error) });
+        return errorResponse("Failed to update guild settings.", { error: safeErrorMessage(error) });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_create_invite",
     {
       title: "Create Discord invite",
-      description: "Create an invite for a channel.",
+      description: "Create an invite for a channel without returning its secret code or URL.",
       annotations: additiveDiscordAnnotations,
       inputSchema: {
-        channelId: snowflake,
+        channelId: discordSnowflakeSchema,
         maxAge: z.number().int().min(0).max(604_800).optional(),
         maxUses: z.number().int().min(0).max(100).optional(),
         temporary: z.boolean().optional(),
         unique: z.boolean().optional(),
         confirm: z.boolean().optional(),
-        reason: optionalReason,
+        reason: auditReasonSchema,
       },
     },
     async (input) => {
@@ -159,30 +154,30 @@ export function registerServerConfigTools(
 
         return successResponse("Invite created.", {
           channelId: input.channelId,
-          code: invite.code,
-          url: invite.url,
           maxAge: invite.maxAge,
           maxUses: invite.maxUses,
           temporary: invite.temporary,
+          secretReturned: false,
+          note: "Invite code and URL are intentionally omitted because they grant access to the guild.",
         });
       } catch (error) {
-        return errorResponse("Failed to create invite.", { error: errorMessage(error) });
+        return errorResponse("Failed to create invite.", { error: safeErrorMessage(error) });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_create_webhook",
     {
       title: "Create Discord webhook",
       description: "Create a webhook in a text-capable guild channel.",
       annotations: additiveDiscordAnnotations,
       inputSchema: {
-        channelId: snowflake,
+        channelId: discordSnowflakeSchema,
         name: z.string().min(1).max(80),
-        avatar: z.string().optional(),
+        avatar: z.string().max(10_000_000).optional(),
         confirm: z.boolean().optional(),
-        reason: optionalReason,
+        reason: auditReasonSchema,
       },
     },
     async (input) => {
@@ -208,22 +203,22 @@ export function registerServerConfigTools(
           note: "Webhook URL is intentionally not returned because it contains a secret token.",
         });
       } catch (error) {
-        return errorResponse("Failed to create webhook.", { error: errorMessage(error) });
+        return errorResponse("Failed to create webhook.", { error: safeErrorMessage(error) });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_delete_webhook",
     {
       title: "Delete Discord webhook",
       description: "Delete a webhook by ID. Requires confirmation and either a backupId or allowWithoutBackup.",
       annotations: destructiveDiscordAnnotations,
       inputSchema: {
-        webhookId: snowflake,
+        webhookId: discordSnowflakeSchema,
         confirm: z.boolean().optional(),
-        reason: optionalReason,
-        backupId: z.string().optional(),
+        reason: auditReasonSchema,
+        backupId: backupIdInputSchema.optional(),
         allowWithoutBackup: z.boolean().optional(),
       },
     },
@@ -240,7 +235,7 @@ export function registerServerConfigTools(
         await webhook.delete(input.reason);
         return successResponse("Webhook deleted.", { webhookId: input.webhookId });
       } catch (error) {
-        return errorResponse("Failed to delete webhook.", { error: errorMessage(error) });
+        return errorResponse("Failed to delete webhook.", { error: safeErrorMessage(error) });
       }
     },
   );

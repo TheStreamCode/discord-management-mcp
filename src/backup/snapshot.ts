@@ -1,5 +1,7 @@
 import type { Guild } from "discord.js";
+import { safeErrorMessage } from "../errors.js";
 import { schemaVersion, type ChannelSnapshot, type JsonValue, type Snapshot, type SnapshotWarning } from "./schema.js";
+import { isSecretKey } from "./sanitize.js";
 
 type AnyRecord = Record<string, unknown>;
 type CollectionLike<T> = Iterable<T> | { values(): IterableIterator<T> } | { map<R>(callback: (item: T) => R): R[] };
@@ -77,8 +79,8 @@ export async function createSnapshot(guild: Guild, capturedAt = new Date()): Pro
         status: Number(event.status),
       }),
     ),
-    webhooks: await fetchJsonArray("webhooks", () => guild.fetchWebhooks(), warnings),
-    invites: await fetchJsonArray("invites", () => guild.invites.fetch(), warnings),
+    webhooks: await fetchJsonArray("webhooks", () => guild.fetchWebhooks(), warnings, serializeWebhook),
+    invites: await fetchJsonArray("invites", () => guild.invites.fetch(), warnings, serializeInvite),
     emojis: await fetchJsonArray("emojis", () => guild.emojis.fetch(), warnings),
     stickers: await fetchJsonArray("stickers", () => guild.stickers.fetch(), warnings),
     applicationCommands: await fetchJsonArray("applicationCommands", () => guild.commands.fetch(), warnings),
@@ -196,17 +198,60 @@ async function fetchJsonArray(
   section: string,
   fetcher: () => Promise<unknown>,
   warnings: SnapshotWarning[],
+  serializer: (value: AnyRecord) => JsonValue = toJsonValue,
 ): Promise<JsonValue[]> {
   try {
-    return toArray(await fetcher()).map(toJsonValue);
+    return toArray(await fetcher()).map(serializer);
   } catch (error) {
-    warnings.push({ section, message: errorMessage(error) });
+    warnings.push({ section, message: safeErrorMessage(error) });
     return [];
   }
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return safeErrorMessage(error);
+}
+
+function serializeWebhook(webhook: AnyRecord): JsonValue {
+  const owner = webhook.owner as AnyRecord | null | undefined;
+  const sourceGuild = webhook.sourceGuild as AnyRecord | null | undefined;
+  const sourceChannel = webhook.sourceChannel as AnyRecord | null | undefined;
+
+  return toJsonValue({
+    id: webhook.id,
+    guildId: webhook.guildId ?? null,
+    channelId: webhook.channelId ?? null,
+    name: webhook.name ?? null,
+    type: webhook.type ?? null,
+    ownerId: owner?.id ?? null,
+    applicationId: webhook.applicationId ?? null,
+    sourceGuildId: sourceGuild?.id ?? null,
+    sourceChannelId: sourceChannel?.id ?? null,
+    createdAt: dateStringOrNull(webhook.createdAt ?? webhook.createdTimestamp),
+  });
+}
+
+function serializeInvite(invite: AnyRecord): JsonValue {
+  const guild = invite.guild as AnyRecord | null | undefined;
+  const channel = invite.channel as AnyRecord | null | undefined;
+  const inviter = invite.inviter as AnyRecord | null | undefined;
+  const targetUser = invite.targetUser as AnyRecord | null | undefined;
+  const targetApplication = invite.targetApplication as AnyRecord | null | undefined;
+
+  return toJsonValue({
+    guildId: guild?.id ?? invite.guildId ?? null,
+    channelId: channel?.id ?? invite.channelId ?? null,
+    inviterId: inviter?.id ?? invite.inviterId ?? null,
+    targetType: invite.targetType ?? null,
+    targetUserId: targetUser?.id ?? null,
+    targetApplicationId: targetApplication?.id ?? null,
+    uses: invite.uses ?? null,
+    maxUses: invite.maxUses ?? null,
+    maxAge: invite.maxAge ?? null,
+    temporary: invite.temporary ?? null,
+    createdAt: dateStringOrNull(invite.createdAt ?? invite.createdTimestamp),
+    expiresAt: dateStringOrNull(invite.expiresAt ?? invite.expiresTimestamp),
+  });
 }
 
 function toArray<T = AnyRecord>(value: unknown): T[] {
@@ -274,11 +319,6 @@ function toJsonValue(value: unknown): JsonValue {
   }
 
   return output;
-}
-
-function isSecretKey(key: string): boolean {
-  const normalized = key.toLowerCase();
-  return normalized.includes("token") || normalized.includes("secret") || normalized.includes("authorization");
 }
 
 function idsToKeys(value: unknown, keysById: Map<string, string>): string[] {

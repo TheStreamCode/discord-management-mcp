@@ -152,4 +152,59 @@ describe("restore apply", () => {
     expect(options.permissionOverwrites[0]?.id).toBe("target-role");
     expect(options.permissionOverwrites[0]?.allow.bitfield).toBe(1024n);
   });
+
+  test("reports completed operations when a later restore operation fails", async () => {
+    const firstRole = {
+      id: "role-1",
+      name: "First",
+      managed: false,
+      editable: true,
+      edit: vi.fn(async function () { return firstRole; }),
+    };
+    const secondRole = {
+      id: "role-2",
+      name: "Second",
+      managed: false,
+      editable: true,
+      edit: vi.fn(async () => { throw new Error("Discord rejected role edit"); }),
+    };
+    const guild = {
+      id: "source-guild",
+      roles: {
+        fetch: vi.fn(async (id?: string) => id
+          ? new Map([[firstRole.id, firstRole], [secondRole.id, secondRole]]).get(id)
+          : new Map([[firstRole.id, firstRole], [secondRole.id, secondRole]])),
+      },
+      channels: { fetch: vi.fn(async () => new Map()) },
+    };
+    const desiredRoles = [firstRole, secondRole].map((role, index) => ({
+      key: `role:${role.name.toLowerCase()}:${index}:${role.id}`,
+      id: role.id,
+      name: role.name,
+      color: 0,
+      hoist: false,
+      mentionable: false,
+      permissions: "0",
+      position: index,
+      managed: false,
+    }));
+    const operations: RestoreOperation[] = desiredRoles.map((role) => ({
+      type: "update",
+      resource: "role",
+      key: role.key,
+      before: { ...role, position: role.position + 1 },
+      after: role,
+      changes: ["position"],
+    }));
+
+    const result = await applyRestoreOperations(
+      guild as never,
+      snapshot({ roles: desiredRoles }),
+      operations,
+      { includeDeletes: false, reason: "restore test" },
+    );
+
+    expect(result.applied).toHaveLength(1);
+    expect(result.failed).toMatchObject({ operation: operations[1], error: "Discord rejected role edit" });
+  });
 });

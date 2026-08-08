@@ -3,6 +3,7 @@ import { ChannelType, OverwriteType, PermissionsBitField, type Guild } from "dis
 import { z } from "zod";
 import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
+import { safeErrorMessage } from "../errors.js";
 import { diffChannels, diffRoles } from "../backup/diff.js";
 import { createSnapshot } from "../backup/snapshot.js";
 import { listBackups, readSnapshot, writeSnapshot } from "../backup/store.js";
@@ -24,30 +25,25 @@ import {
   localReadOnlyAnnotations,
   readOnlyDiscordAnnotations,
 } from "../toolAnnotations.js";
+import { defaultOutputToolRegistrar, defaultToolOutputSchema } from "../toolRegistration.js";
+import { auditReasonSchema, backupIdInputSchema, discordSnowflakeSchema } from "../toolSchemas.js";
 
 export function registerBackupTools(
   server: McpServer,
   discord: DiscordClientManager,
   config: ServerConfig,
 ): void {
-  server.registerTool(
+  const registerTool = defaultOutputToolRegistrar(server);
+
+  registerTool(
     "discord_backup_create",
     {
       title: "Create Discord Backup",
       description: "Capture the current Discord guild configuration as a JSON backup snapshot.",
       inputSchema: {
-        guildId: z.string().min(1).describe("Discord guild ID to snapshot."),
+        guildId: discordSnowflakeSchema.describe("Discord guild ID to snapshot."),
       },
-      outputSchema: z.union([
-        z.object({
-          backupId: z.string(),
-          guildId: z.string(),
-          capturedAt: z.string(),
-          counts: countsSchema(),
-          warnings: snapshotWarningsSchema(),
-        }),
-        errorOutputSchema(),
-      ]),
+      outputSchema: defaultToolOutputSchema,
       annotations: additiveDiscordAnnotations,
     },
     async ({ guildId }) => {
@@ -65,25 +61,19 @@ export function registerBackupTools(
         });
       } catch (error) {
         return errorResponse("Failed to create Discord backup.", {
-          error: errorMessage(error),
+          error: safeErrorMessage(error),
         });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_backup_list",
     {
       title: "List Discord Backups",
       description: "List stored Discord backup snapshot IDs, newest first.",
       inputSchema: {},
-      outputSchema: z.union([
-        z.object({
-          backupIds: z.array(z.string()),
-          count: z.number(),
-        }),
-        errorOutputSchema(),
-      ]),
+      outputSchema: defaultToolOutputSchema,
       annotations: localReadOnlyAnnotations,
     },
     async () => {
@@ -96,29 +86,21 @@ export function registerBackupTools(
         });
       } catch (error) {
         return errorResponse("Failed to list Discord backups.", {
-          error: errorMessage(error),
+          error: safeErrorMessage(error),
         });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_backup_read",
     {
       title: "Read Discord Backup",
-      description: "Read a stored Discord backup snapshot by backup ID.",
+      description: "Validate a stored Discord backup and return sanitized metadata without exposing its payload.",
       inputSchema: {
-        backupId: z.string().min(1).describe("Backup file ID returned by discord_backup_list or create."),
+        backupId: backupIdInputSchema.describe("Backup file ID returned by discord_backup_list or create."),
       },
-      outputSchema: z.union([
-        z.object({
-          backupId: z.string(),
-          snapshot: z.unknown(),
-          counts: countsSchema(),
-          warnings: snapshotWarningsSchema(),
-        }),
-        errorOutputSchema({ backupId: z.string() }),
-      ]),
+      outputSchema: defaultToolOutputSchema,
       annotations: localReadOnlyAnnotations,
     },
     async ({ backupId }) => {
@@ -127,40 +109,33 @@ export function registerBackupTools(
 
         return successResponse(`Read backup ${backupId}.`, {
           backupId,
-          snapshot,
+          guildId: snapshot.guild.id,
+          guildName: snapshot.guild.name,
+          capturedAt: snapshot.capturedAt,
           counts: snapshotCounts(snapshot),
           warnings: snapshot.warnings ?? [],
+          snapshotReturned: false,
+          note: "The backup payload remains local and is intentionally not returned by this tool.",
         });
       } catch (error) {
         return errorResponse(`Failed to read backup ${backupId}.`, {
           backupId,
-          error: errorMessage(error),
+          error: safeErrorMessage(error),
         });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_backup_diff",
     {
       title: "Diff Discord Backups",
       description: "Compare roles and channels between two stored backup snapshots.",
       inputSchema: {
-        beforeBackupId: z.string().min(1).describe("Older or source backup ID."),
-        afterBackupId: z.string().min(1).describe("Newer or target backup ID."),
+        beforeBackupId: backupIdInputSchema.describe("Older or source backup ID."),
+        afterBackupId: backupIdInputSchema.describe("Newer or target backup ID."),
       },
-      outputSchema: z.union([
-        z.object({
-          beforeBackupId: z.string(),
-          afterBackupId: z.string(),
-          operations: z.array(z.unknown()),
-          summary: summarySchema(),
-        }),
-        errorOutputSchema({
-          beforeBackupId: z.string(),
-          afterBackupId: z.string(),
-        }),
-      ]),
+      outputSchema: defaultToolOutputSchema,
       annotations: localReadOnlyAnnotations,
     },
     async ({ beforeBackupId, afterBackupId }) => {
@@ -179,33 +154,23 @@ export function registerBackupTools(
         return errorResponse("Failed to diff Discord backups.", {
           beforeBackupId,
           afterBackupId,
-          error: errorMessage(error),
+          error: safeErrorMessage(error),
         });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_backup_restore_plan",
     {
       title: "Plan Discord Backup Restore",
       description:
         "Create a non-mutating restore plan that compares the live guild to a stored backup.",
       inputSchema: {
-        backupId: z.string().min(1).describe("Backup snapshot to restore toward."),
-        targetGuildId: z.string().min(1).describe("Live Discord guild ID to compare against the backup."),
+        backupId: backupIdInputSchema.describe("Backup snapshot to restore toward."),
+        targetGuildId: discordSnowflakeSchema.describe("Live Discord guild ID to compare against the backup."),
       },
-      outputSchema: z.union([
-        z.object({
-          plan: z.unknown(),
-          summary: summarySchema(),
-          safetyMessage: z.string(),
-        }),
-        errorOutputSchema({
-          backupId: z.string(),
-          targetGuildId: z.string(),
-        }),
-      ]),
+      outputSchema: defaultToolOutputSchema,
       annotations: readOnlyDiscordAnnotations,
     },
     async ({ backupId, targetGuildId }) => {
@@ -238,40 +203,27 @@ export function registerBackupTools(
         return errorResponse("Failed to create Discord restore plan.", {
           backupId,
           targetGuildId,
-          error: errorMessage(error),
+          error: safeErrorMessage(error),
         });
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_backup_restore_apply",
     {
       title: "Apply Discord Backup Restore",
       description:
         "Conservatively apply role/channel create/update operations from a backup. Creates a pre-restore backup first. Deletes require includeDeletes: true.",
       inputSchema: {
-        backupId: z.string().min(1),
-        targetGuildId: z.string().min(1),
+        backupId: backupIdInputSchema,
+        targetGuildId: discordSnowflakeSchema,
         confirm: z.boolean().optional(),
-        reason: z.string().min(1).optional(),
+        reason: auditReasonSchema,
         includeDeletes: z.boolean().optional(),
         allowCrossGuild: z.boolean().optional(),
       },
-      outputSchema: z.union([
-        z.object({
-          preRestoreBackupId: z.string(),
-          sourceBackupId: z.string(),
-          targetGuildId: z.string(),
-          applied: z.array(z.unknown()),
-          skipped: z.array(z.unknown()),
-          warnings: z.array(z.unknown()),
-        }),
-        errorOutputSchema({
-          backupId: z.string(),
-          targetGuildId: z.string(),
-        }),
-      ]),
+      outputSchema: defaultToolOutputSchema,
       annotations: destructiveDiscordAnnotations,
     },
     async (input) => {
@@ -300,29 +252,39 @@ export function registerBackupTools(
           reason: input.reason!,
         });
 
-        return successResponse("Restore apply completed with conservative safeguards.", {
+        const restoreDetails = {
           preRestoreBackupId,
           sourceBackupId: input.backupId,
           targetGuildId: guild.id,
           applied: result.applied,
           skipped: result.skipped,
+          failed: result.failed ?? null,
           warnings: [
             ...(desired.warnings ?? []).map((warning) => ({
               code: "SOURCE_BACKUP_WARNING",
               ...warning,
             })),
+            ...restoreWarnings(desired.guild.id, guild.id),
             {
               code: "LOSSY_RESTORE_LIMITS",
               message:
                 "Discord cannot preserve recreated IDs, message history, invite codes, webhook tokens, or managed integration objects.",
             },
           ],
+        };
+
+        if (result.failed) {
+          return errorResponse("Restore stopped after an operation failed; partial progress is reported.", restoreDetails);
+        }
+
+        return successResponse("Restore apply completed with conservative safeguards.", {
+          ...restoreDetails,
         });
       } catch (error) {
         return errorResponse("Failed to apply Discord restore.", {
           backupId: input.backupId,
           targetGuildId: input.targetGuildId,
-          error: errorMessage(error),
+          error: safeErrorMessage(error),
         });
       }
     },
@@ -354,7 +316,11 @@ export async function applyRestoreOperations(
   desired: Snapshot,
   operations: RestoreOperation[],
   options: { includeDeletes: boolean; reason: string },
-): Promise<{ applied: unknown[]; skipped: unknown[] }> {
+): Promise<{
+  applied: unknown[];
+  skipped: unknown[];
+  failed?: { operation: RestoreOperation; error: string };
+}> {
   const applied: unknown[] = [];
   const skipped: unknown[] = [];
   const roleIdByKey = new Map<string, string>();
@@ -385,7 +351,16 @@ export async function applyRestoreOperations(
   }
 
   for (const operation of operations.filter((item) => item.resource === "role")) {
-    const result = await applyRoleOperation(guild, operation, options);
+    let result: Awaited<ReturnType<typeof applyRoleOperation>>;
+    try {
+      result = await applyRoleOperation(guild, operation, options);
+    } catch (error) {
+      return {
+        applied,
+        skipped,
+        failed: { operation, error: safeErrorMessage(error) },
+      };
+    }
     (result.applied ? applied : skipped).push(result.detail);
     if (result.key && result.id) {
       roleIdByKey.set(result.key, result.id);
@@ -399,14 +374,23 @@ export async function applyRestoreOperations(
   ];
 
   for (const operation of sortedChannelOperations) {
-    const result = await applyChannelOperation(
-      guild,
-      operation,
-      channelIdByKey,
-      roleIdByKey,
-      desired.guild.id !== guild.id,
-      options,
-    );
+    let result: Awaited<ReturnType<typeof applyChannelOperation>>;
+    try {
+      result = await applyChannelOperation(
+        guild,
+        operation,
+        channelIdByKey,
+        roleIdByKey,
+        desired.guild.id !== guild.id,
+        options,
+      );
+    } catch (error) {
+      return {
+        applied,
+        skipped,
+        failed: { operation, error: safeErrorMessage(error) },
+      };
+    }
     (result.applied ? applied : skipped).push(result.detail);
     if (result.key && result.id) {
       channelIdByKey.set(result.key, result.id);
@@ -633,44 +617,6 @@ function operationChannelType(operation: RestoreOperation): number | undefined {
   return undefined;
 }
 
-function countsSchema() {
-  return z.object({
-    roles: z.number(),
-    channels: z.number(),
-    autoModRules: z.number(),
-    scheduledEvents: z.number(),
-    webhooks: z.number(),
-    invites: z.number(),
-    emojis: z.number(),
-    stickers: z.number(),
-    applicationCommands: z.number(),
-  });
-}
-
-function snapshotWarningsSchema() {
-  return z.array(z.object({
-    section: z.string(),
-    message: z.string(),
-  }));
-}
-
-function summarySchema() {
-  return z.object({
-    create: z.number(),
-    update: z.number(),
-    delete: z.number(),
-    skip: z.number(),
-    total: z.number(),
-  });
-}
-
-function errorOutputSchema<TShape extends z.ZodRawShape>(shape?: TShape) {
-  return z.object({
-    ...shape,
-    error: z.string(),
-  });
-}
-
 function snapshotCounts(snapshot: {
   roles: unknown[];
   channels: unknown[];
@@ -705,8 +651,4 @@ function operationSummary(operations: { type: string }[]) {
   }
 
   return summary;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Unknown error";
 }

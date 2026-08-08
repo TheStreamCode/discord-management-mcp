@@ -17,37 +17,40 @@ import type {
 import { z } from "zod";
 import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
+import { safeErrorMessage } from "../errors.js";
 import { errorResponse, successResponse } from "../responses.js";
 import { readOnlyDiscordAnnotations } from "../toolAnnotations.js";
+import { defaultOutputToolRegistrar } from "../toolRegistration.js";
+import { discordSnowflakeSchema } from "../toolSchemas.js";
 
 type JsonObject = Record<string, unknown>;
 
 const emptySchema = z.object({});
 const guildIdSchema = {
-  guildId: z.string().min(1, "guildId is required"),
+  guildId: discordSnowflakeSchema,
 };
 const channelIdSchema = {
   ...guildIdSchema,
-  channelId: z.string().min(1, "channelId is required"),
+  channelId: discordSnowflakeSchema,
 };
 const roleIdSchema = {
   ...guildIdSchema,
-  roleId: z.string().min(1, "roleId is required"),
+  roleId: discordSnowflakeSchema,
 };
 const listMembersSchema = {
   ...guildIdSchema,
   limit: z.number().int().min(1).max(1000).default(100),
-  after: z.string().min(1).optional(),
+  after: discordSnowflakeSchema.optional(),
 };
 const listMessagesSchema = {
   ...channelIdSchema,
   limit: z.number().int().min(1).max(100).default(25),
-  before: z.string().min(1).optional(),
-  after: z.string().min(1).optional(),
-  around: z.string().min(1).optional(),
+  before: discordSnowflakeSchema.optional(),
+  after: discordSnowflakeSchema.optional(),
+  around: discordSnowflakeSchema.optional(),
 };
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : "Unknown Discord API error.";
+  return safeErrorMessage(error);
 }
 
 function toIsoDate(value: unknown): string | null {
@@ -258,7 +261,6 @@ function mapWebhook(webhook: Webhook): JsonObject {
 
 function mapInvite(invite: Invite): JsonObject {
   return {
-    code: invite.code,
     guildId: invite.guild?.id ?? null,
     channelId: invite.channel?.id ?? null,
     inviterId: invite.inviter?.id ?? null,
@@ -271,6 +273,7 @@ function mapInvite(invite: Invite): JsonObject {
     temporary: invite.temporary,
     createdAt: toIsoDate(invite.createdAt),
     expiresAt: toIsoDate(invite.expiresAt),
+    secretReturned: false,
   };
 }
 
@@ -389,7 +392,9 @@ export function registerGuildTools(
   discord: DiscordClientManager,
   config: ServerConfig,
 ): void {
-  server.registerTool(
+  const registerTool = defaultOutputToolRegistrar(server);
+
+  registerTool(
     "discord_list_guilds",
     {
       description: "List Discord guilds visible to the configured bot.",
@@ -412,7 +417,7 @@ export function registerGuildTools(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_get_guild",
     {
       description: "Get Discord guild metadata.",
@@ -434,7 +439,7 @@ export function registerGuildTools(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_list_channels",
     {
       description: "List channels in a Discord guild.",
@@ -461,7 +466,7 @@ export function registerGuildTools(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_get_channel",
     {
       description: "Get Discord channel metadata.",
@@ -489,7 +494,7 @@ export function registerGuildTools(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_list_channel_messages",
     {
       description:
@@ -563,7 +568,7 @@ export function registerGuildTools(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_list_roles",
     {
       description: "List roles in a Discord guild.",
@@ -588,7 +593,7 @@ export function registerGuildTools(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_get_role",
     {
       description: "Get Discord role metadata.",
@@ -616,7 +621,7 @@ export function registerGuildTools(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_list_members",
     {
       description: "List guild members, capped at 1000.",
@@ -647,7 +652,7 @@ export function registerGuildTools(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_list_automod_rules",
     {
       description: "List AutoMod rules in a Discord guild.",
@@ -674,7 +679,7 @@ export function registerGuildTools(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_list_scheduled_events",
     {
       description: "List scheduled events in a Discord guild.",
@@ -701,7 +706,7 @@ export function registerGuildTools(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_list_webhooks",
     {
       description: "List webhooks in a Discord guild without exposing tokens.",
@@ -726,10 +731,10 @@ export function registerGuildTools(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_list_invites",
     {
-      description: "List invites in a Discord guild.",
+      description: "List non-secret invite metadata in a Discord guild; invite codes and URLs are omitted.",
       inputSchema: guildIdSchema,
       annotations: readOnlyDiscordAnnotations,
     },
@@ -751,7 +756,7 @@ export function registerGuildTools(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_list_emojis",
     {
       description: "List emojis in a Discord guild.",
@@ -776,7 +781,7 @@ export function registerGuildTools(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_list_stickers",
     {
       description: "List stickers in a Discord guild.",
@@ -801,7 +806,7 @@ export function registerGuildTools(
     },
   );
 
-  server.registerTool(
+  registerTool(
     "discord_list_application_commands",
     {
       description: "List guild application commands.",

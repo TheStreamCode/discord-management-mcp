@@ -206,7 +206,7 @@ Use [GitHub Issues](https://github.com/TheStreamCode/discord-management-mcp/issu
 
 If this project helps you manage Discord communities safely, you can support continued maintenance through [GitHub Sponsors](https://github.com/sponsors/TheStreamCode).
 
-## License And Discord Notice
+## License
 
 Project-owned code and materials are licensed under the [MIT License](./LICENSE). Copyright © 2026 Michael Gasperini.
 

@@ -2,6 +2,7 @@
 
 ## Where to get help
 
+- **Usage questions and workflows:** GitHub Discussions on this repository.
 - **Bug reports and reproducible defects:** GitHub Issues using the bug report form.
 - **Feature proposals:** GitHub Issues using the feature request form.
 - **Security problems:** see `SECURITY.md` and report privately through GitHub Security

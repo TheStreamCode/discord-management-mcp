@@ -16,6 +16,27 @@ Report privately through [GitHub private vulnerability reporting](https://github
 - Expected and actual behavior
 - Whether a Discord token, webhook token, backup, or guild structure was exposed
 
+## Scope
+
+In scope:
+
+- defects in this repository's code, build scripts, or release artifacts;
+- credential or secret exposure caused by this project;
+- a mutation guard or backup guard that can be bypassed by a client.
+
+Out of scope:
+
+- vulnerabilities in Discord, Discord.js, or another third-party product, which must be reported
+  upstream;
+- misconfiguration of an operator's environment or MCP client;
+- social engineering, spam, or denial-of-service against third-party services.
+
+## Response Expectations
+
+Reports are acknowledged within 7 days and receive a status update within 30 days. A valid report
+is fixed privately and disclosed in the release notes once a patched version is available. Credit
+is given in the advisory unless you ask otherwise.
+
 ## Operational Security
 
 - Use a dedicated Discord bot token.

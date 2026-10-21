@@ -1,193 +1,163 @@
 # Discord Management MCP
 
+Safe-by-default Discord management from any MCP client
+
 [![CI](https://github.com/TheStreamCode/discord-management-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/TheStreamCode/discord-management-mcp/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/discord-management-mcp.svg)](https://www.npmjs.com/package/discord-management-mcp)
-[![node](https://img.shields.io/node/v/discord-management-mcp.svg)](https://nodejs.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![npm](https://img.shields.io/npm/v/discord-management-mcp.svg)](https://www.npmjs.com/package/discord-management-mcp)
 
 ![Discord Management MCP hero](https://raw.githubusercontent.com/TheStreamCode/discord-management-mcp/main/assets/discord-management-mcp-hero.webp)
 
-Safely inspect and manage Discord guilds from any Model Context Protocol client. Discord Management MCP runs locally over stdio, keeps credentials and backups on your machine, and places explicit confirmation and rollback guards in front of every mutation.
+Discord Management MCP is a local Model Context Protocol (MCP) server for inspecting and
+managing Discord guilds. It runs over stdio, keeps the bot token and backups on the
+operator's machine, and places explicit confirmation and rollback guards in front of every
+mutation. It is built for server owners and moderators who want agent-driven automation
+without handing control to a hosted service. This independently developed project is not
+affiliated with, endorsed by, sponsored by, or approved by Discord Inc.
+
+## Install
+
+Run the published package with any MCP client:
 
 ```bash
 npx --yes discord-management-mcp
 ```
 
-No hosted relay. No public HTTP listener. No user tokens or selfbots.
-
-## Why Discord Management MCP?
-
-- **Safe by default:** every mutation requires `confirm: true` and a non-empty audit reason.
-- **Rollback-aware:** destructive operations require a guild-matched backup or an explicit operator acknowledgement.
-- **Local-first:** the bot token, backup files, restore plans, and stdio transport stay on the operator's machine.
-- **Discord-focused:** 47 tools cover inventory, channels, roles, moderation, AutoMod, events, webhooks, invites, backups, and restore planning.
-- **Honest recovery:** restore reports skipped, lossy, applied, and failed operations instead of promising an impossible full rollback.
-
-## Quick Start
-
-### 1. Requirements
-
-- Node.js `>=24`
-- A Discord application with a bot token
-- The bot invited to the target guild with only the permissions required for the intended tools
-
-Create `.env.local` from [`.env.example`](./.env.example):
-
-```dotenv
-DISCORD_TOKEN=your_bot_token_here
-LOG_LEVEL=info
-BACKUP_DIR=backups
-ENABLE_MESSAGE_CONTENT=false
-ENABLE_GUILD_MEMBERS=false
-```
-
-Use the token from **Discord Developer Portal → Application → Bot → Token**. Do not use an Application ID, Public Key, user token, or selfbot token.
-
-### 2. Configure your MCP client
-
-The recommended package-based configuration is:
-
-```json
-{
-  "mcpServers": {
-    "discord-management": {
-      "command": "npx",
-      "args": ["--yes", "discord-management-mcp"]
-    }
-  }
-}
-```
-
-Provide `DISCORD_TOKEN` through the client's secure environment configuration or run the client from a directory containing the local `.env.local` file. Never paste a real token into a shared configuration file.
-
-<details>
-<summary>Install globally or run from source</summary>
-
-Install the CLI globally:
+Install it globally or run it from a source checkout:
 
 ```bash
 npm install --global discord-management-mcp
 discord-management-mcp
 ```
 
-Run from source with the repository-local toolchain:
-
 ```bash
+git clone https://github.com/TheStreamCode/discord-management-mcp.git
+cd discord-management-mcp
 npm ci
 npm run build
 npm start
 ```
 
-For a source checkout, configure the MCP command as `node`, point `args` to the absolute `dist/index.js` path, and set `cwd` to the repository root.
+## Quick start
 
-</details>
+1. Create a Discord application, add a bot, and copy the Bot Token from
+   **Developer Portal → Application → Bot → Token**. Do not use an Application ID, Public
+   Key, OAuth2 client secret, user token, or selfbot token.
+2. Provide `DISCORD_TOKEN` through the MCP client's secure environment configuration, or run
+   the client from a directory that contains a local `.env.local` file.
+3. Register the server in your MCP client:
 
-### 3. Start with a safe workflow
+   ```json
+   {
+     "mcpServers": {
+       "discord-management": {
+         "command": "npx",
+         "args": ["--yes", "discord-management-mcp"]
+       }
+     }
+   }
+   ```
 
-```text
-Inspect the guild
-      ↓
-Create a local backup
-      ↓
-Review the proposed plan
-      ↓
-Confirm the mutation with an audit reason
-      ↓
-Verify the result or use the pre-restore backup
-```
+4. Start with read-only tools, create a local backup, review the restore plan, then confirm a
+   mutation with an audit reason:
 
-Example operator request:
+   ```json
+   {
+     "guildId": "123456789012345678",
+     "confirm": true,
+     "reason": "Create the approved community announcements channel"
+   }
+   ```
 
-```json
-{
-  "guildId": "123456789012345678",
-  "confirm": true,
-  "reason": "Create the approved community announcements channel"
-}
-```
+   Delete and other high-impact operations also require a guild-matched `backupId` unless the
+   operator explicitly accepts `allowWithoutBackup: true`.
 
-Delete and other high-impact operations additionally require:
+## Features
 
-```json
-{
-  "backupId": "2026-08-08T12-34-56-000Z-123456789012345678.json"
-}
-```
-
-Use `allowWithoutBackup: true` only when you intentionally accept incomplete rollback coverage.
-
-## Safety Architecture
-
-```text
-┌─────────────────┐       local stdio       ┌─────────────────────────┐
-│   MCP client    │ ──────────────────────▶ │ Discord Management MCP  │
-└─────────────────┘                         │                         │
-                                            │ Zod input bounds        │
-                                            │ confirmation guards     │
-                                            │ secret redaction        │
-                                            │ backup validation       │
-                                            └───────────┬─────────────┘
-                                                        │
-                                      ┌─────────────────┴──────────────┐
-                                      ▼                                ▼
-                              local JSON backups                 Discord API
-```
-
-Core safety guarantees:
-
+- 47 tools cover guild inventory, channels, roles, moderation, AutoMod, scheduled events,
+  webhooks, invites, backups, and restore planning.
+- Every mutation requires `confirm: true` and a non-empty audit reason.
+- Destructive operations require a guild-matched backup or an explicit operator acknowledgement.
 - Read-only tools are annotated and implemented as read-only.
-- Mutating tools require explicit confirmation and a human-readable reason.
-- Backup IDs are path-safe and destructive guild operations reject cross-guild backups.
-- Core role/channel capture fails closed; optional sections produce structured warnings.
-- Invite codes, invite URLs, webhook tokens, authorization fields, and recursively detected secret fields are omitted.
-- Backup input is size-, depth-, structure-, and symlink-validated before planning or restore.
-- A restore creates a pre-restore backup before its first Discord mutation and stops truthfully on operation failure.
+- The bot token, backups, restore plans, and the stdio transport stay on the operator's machine;
+  there is no hosted relay and no public HTTP listener.
+- Backup capture fails closed on core sections; optional sections emit structured warnings.
+- Invite codes, invite URLs, webhook tokens, authorization fields, and recursively detected
+  secret fields are removed from snapshots and tool output.
+- Restore reports skipped, lossy, applied, and failed operations instead of promising an
+  impossible full rollback.
 
-## Capabilities
+## Requirements
 
-| Area | Examples |
-| --- | --- |
-| Guild inventory | Guilds, channels, roles, members, messages, emojis, stickers, commands |
-| Channel management | Create, update, delete, reorder, and permission overwrites |
-| Role management | Create, update, delete, reorder, assign, and remove |
-| Moderation | Timeout, kick, ban, unban, and guarded bulk message deletion |
-| Discord automation | AutoMod rules and scheduled events |
-| Integrations | Non-secret webhook and invite management |
-| Backup and restore | Create, list, validate, diff, plan, and conservatively apply |
+- Node.js 24 or newer.
+- A Discord application with a bot token.
+- The bot invited to the target guild with only the permissions required for the intended tools.
 
-See the complete [tool catalog](./docs/tools.md).
+## Configuration
 
-## Backup And Restore
+Configuration is read from the process environment first, then from `.env.local` in the working
+directory. Boolean values accept `true`/`false`, `yes`/`no`, `on`/`off`, or `1`/`0`.
 
-Backups are bounded, validated JSON snapshots stored in `BACKUP_DIR`. They can contain sensitive guild structure, so they are ignored by Git and should remain private.
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `DISCORD_TOKEN` | Discord bot token from Developer Portal > Bot > Token | Required |
+| `BACKUP_DIR` | Relative directory for local JSON backups; it must stay inside the project directory | `backups` |
+| `LOG_LEVEL` | Logging controls | `info` |
+| `ENABLE_MESSAGE_CONTENT` | Enables message-content tools and requires the Discord Message Content intent | `false` |
+| `ENABLE_GUILD_MEMBERS` | Enables the Guild Members gateway intent for workflows that require it | `false` |
 
-`discord_backup_read` validates a snapshot and returns only its guild metadata, capture time, resource counts, and warnings. The full payload remains local; diff, restore planning, and restore apply consume it internally.
+See the [configuration reference](docs/configuration.md) for token rules and privileged-intent
+setup.
 
-Restore is intentionally conservative. Discord cannot recreate original IDs, message or audit-log history, invite codes, webhook tokens, managed integration objects, or every community/discovery setting. Cross-guild permission targets that cannot be mapped safely are preserved and reported rather than guessed.
+## Privacy and security
 
-## Discord Intents
+Everything runs locally over stdio: the bot token, backup files, restore plans, and the server
+process itself never leave the operator's machine. Mutations are guarded by explicit confirmation
+and by backups that are validated for size, depth, structure, and symlinks before planning or
+restore. A restore creates a pre-restore backup before its first Discord mutation and stops
+truthfully on operation failure. See the [design and trust boundaries](docs/design.md) and
+[safety and backups](docs/safety-and-backups.md) for the full model, and `SECURITY.md` for private
+vulnerability reporting.
 
-Privileged gateway intents are opt-in:
+## Troubleshooting
 
-- `ENABLE_MESSAGE_CONTENT=true` enables `discord_list_channel_messages` and also requires **Message Content Intent** in the Discord Developer Portal.
-- `ENABLE_GUILD_MEMBERS=true` enables stronger member-listing behavior and also requires **Guild Members Intent** where Discord enforces it.
+### The server exits because `DISCORD_TOKEN` is missing or invalid
 
-If a toggle is enabled locally but disabled in the Developer Portal, Discord can reject login or omit the corresponding data.
+Set the Bot Token in the process environment or in `.env.local` in the working directory. A value
+that looks like a Discord Application Public Key is rejected with an explicit message: use the Bot
+Token, not the Application ID, Public Key, or OAuth2 client secret.
 
-## Documentation
+### Message content comes back empty
 
-- [Configuration](./docs/configuration.md)
-- [Tool catalog](./docs/tools.md)
-- [Safety and backups](./docs/safety-and-backups.md)
-- [Design and trust boundaries](./docs/design.md)
-- [Security policy](./SECURITY.md)
-- [Contributing](./CONTRIBUTING.md)
+Message-content tools need both `ENABLE_MESSAGE_CONTENT=true` and the **Message Content Intent**
+enabled in the Discord Developer Portal. Without both, Discord can return empty `content`,
+`embeds`, and `attachments` fields. Restart the server after changing either side.
+
+### A mutation is rejected before it reaches Discord
+
+Mutating tools require `confirm: true` and a non-empty `reason`. Delete and other high-impact
+destructive tools additionally require a `backupId` from the same guild, or an explicit
+`allowWithoutBackup: true` acknowledgement.
+
+### A backup cannot be created or reused
+
+Core role and channel capture fails closed when the bot cannot read those sections; grant the
+permissions required by the intended tools. Backups are validated before planning or restore, and
+a guild-targeted destructive action rejects a backup captured from another guild.
+
+### Restore reports skipped or lossy operations
+
+Discord cannot recreate original IDs, message or audit-log history, exact invite codes, webhook
+tokens, managed integration objects, or every community and discovery setting. Review the restore
+plan and the reported operations before retrying.
 
 ## Development
 
-Use the repository-local Node.js toolchain:
+Requirements: Node.js 24 or newer and npm from the lockfile.
 
 ```bash
+git clone https://github.com/TheStreamCode/discord-management-mcp.git
+cd discord-management-mcp
 npm ci
 npm run lint
 npm run typecheck
@@ -195,19 +165,31 @@ npm test
 npm run build
 npm run preflight
 npm run pack:check
-npm audit --omit=dev
+npm audit --omit=dev --audit-level=high
 ```
 
-Tests use mocks and must not contact Discord. Live mutations are never part of routine verification.
+Tests use mocks and must not contact Discord. Live mutations are never part of routine
+verification. See `AGENTS.md` for repository conventions.
 
 ## Support
 
-Use [GitHub Issues](https://github.com/TheStreamCode/discord-management-mcp/issues) for reproducible bugs and feature proposals. Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/TheStreamCode/discord-management-mcp/security/advisories/new).
+See `SUPPORT.md`. Use GitHub Issues for reproducible bugs and feature proposals, and report
+vulnerabilities privately through GitHub Security Advisories.
 
-If this project helps you manage Discord communities safely, you can support continued maintenance through [GitHub Sponsors](https://github.com/sponsors/TheStreamCode).
+## Contributing
+
+See `CONTRIBUTING.md`. Pull requests must pass `npm run preflight` and the required CI checks.
 
 ## License
 
-Project-owned code and materials are licensed under the [MIT License](./LICENSE). Copyright © 2026 Michael Gasperini.
+MIT — see [`LICENSE`](LICENSE). Copyright (c) 2026 Michael Gasperini (Mikesoft).
 
-This independently developed project is not affiliated with, endorsed by, sponsored by, or approved by Discord Inc. Discord is a trademark of Discord Inc. The MIT License does not grant rights in Discord names, logos, services, branding, APIs, or content. See [NOTICE](./NOTICE) for the applicable Discord terms and policies.
+This independently developed project is not affiliated with, endorsed by, sponsored by, or
+approved by Discord Inc. Discord is a trademark of Discord Inc. See [`NOTICE`](NOTICE) for the
+applicable Discord terms and policies.
+
+---
+
+Maintained by [Michael Gasperini (Mikesoft)](https://mikesoft.it).
+If this project helps you manage Discord communities safely, consider
+[sponsoring its maintenance](https://github.com/sponsors/TheStreamCode).

@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a reproducible defect in the MCP server
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a defect.
+        Fill in every field: reports without a version and a reproduction are hard to act on.
+        Never include bot tokens, webhook tokens, invite codes, or private guild data.
+        For security issues use SECURITY.md, never a public issue.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Package version or commit the problem appears in.
+      placeholder: "0.1.2"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Node.js and npm versions, MCP client, and operating system.
+      placeholder: "Node.js 24, Claude Desktop, Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Smallest sequence that shows the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or diagnostics
+      description: Redact bot tokens, webhook URLs, invite codes, backup payloads, and private guild data.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: This report does not contain credentials or private guild data.
+          required: true

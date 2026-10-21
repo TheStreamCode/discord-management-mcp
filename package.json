@@ -8,11 +8,8 @@
     "name": "Michael Gasperini",
     "url": "https://mikesoft.it"
   },
-  "homepage": "https://github.com/TheStreamCode/discord-management-mcp#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/TheStreamCode/discord-management-mcp.git"
-  },
+  "homepage": "https://www.npmjs.com/package/discord-management-mcp",
+  "repository": "github:TheStreamCode/discord-management-mcp",
   "bugs": {
     "url": "https://github.com/TheStreamCode/discord-management-mcp/issues"
   },

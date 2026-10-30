@@ -27,31 +27,32 @@ Before creating a release:
 
 The package name is `discord-management-mcp` and publication is configured for the public npm registry.
 Version `0.1.0` was published on 2026-08-01 with npm provenance, bootstrapped by a granular automation
-token stored as the `NPM_TOKEN` repository secret. Patch releases continue to use that workflow until
-Trusted Publishing is independently confirmed on npmjs.com.
+token stored as the `NPM_TOKEN` repository secret. Starting with `0.2.0`, publication uses npm Trusted
+Publishing (OIDC) and the long-lived token is no longer used by the workflow.
 
 The workflow grants `id-token: write`, runs on a GitHub-hosted runner, verifies source and release
 metadata, and publishes with npm provenance. It also runs in the `npm` environment, verifies that the
 release commit is an ancestor of `main`, re-runs `pack:check`, and blocks on the runtime dependency
-audit before publishing.
+audit before publishing. A `workflow_dispatch` trigger accepts an existing release tag so a failed
+publication can be retried without recreating the release.
 
-### Pending: migrate to Trusted Publishing
+### Trusted Publishing
 
-Now that the package exists on npm, the token bootstrap should be retired. This is a manual
-maintainer task on npmjs.com; it cannot be scripted from the repository.
+Trusted Publishing is configured on npmjs.com for:
 
-1. Configure npm Trusted Publishing for:
-   - provider: GitHub Actions
-   - organization: `TheStreamCode`
-   - repository: `discord-management-mcp`
-   - workflow: `publish.yml`
-   - allowed action: `npm publish`
-2. Remove the `NODE_AUTH_TOKEN` env block from `.github/workflows/publish.yml`.
-3. Delete the `NPM_TOKEN` GitHub secret.
-4. Restrict traditional token-based publication in the npm package settings.
+- provider: GitHub Actions
+- organization: `TheStreamCode`
+- repository: `discord-management-mcp`
+- workflow: `publish.yml`
+- environment: `npm`
+- allowed actions: `npm publish`, `npm stage publish`
 
-Do not remove the secret before step 1 is complete: the publish workflow would lose its only
-credential and the next release would fail.
+The connection stays in `Pending validation` until the first successful OIDC publication. After that
+first publish, delete the unused `NPM_TOKEN` repository secret and keep the traditional-token option
+restricted in the package settings.
+
+A release is published with `npm publish --provenance`; no npm token exists in the workflow, so there
+is nothing to rotate and a stolen repository secret cannot publish the package.
 
 ## GitHub Repository Settings
 

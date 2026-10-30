@@ -12,7 +12,7 @@ All notable changes to this project are documented in this file.
 - A FIFO mutation queue serializes mutating tool calls, and restore apply holds an exclusive slot.
 - Functional structured logging: `LOG_LEVEL` accepts `error`, `warn`, `info`, and `debug`, and writes JSON lines to stderr only.
 - MCP registry metadata: `package.json` declares `mcpName` and the repository ships `server.json`, both identifying `io.github.TheStreamCode/discord-management-mcp`.
-- Release and CI hardening: the `npm run verify:mcp` protocol smoke test runs on Linux and Windows, the Windows job builds and verifies the npm package, a weekly dependency audit workflow was added, and the publish workflow gates on audit, `pack:check`, main ancestry, and the `npm` environment.
+- Release and CI hardening: publication uses npm Trusted Publishing (OIDC) with no long-lived token, the publish workflow gates on audit, `pack:check`, main ancestry and the `npm` environment, a manual dispatch trigger can retry a failed publication, the `npm run verify:mcp` protocol smoke test runs on Linux and Windows, the Windows job builds and verifies the npm package, and a weekly dependency audit workflow was added.
 
 ### Changed
 

@@ -4,6 +4,12 @@ name: Publish to npm
   release:
     types:
       - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish, for example v0.2.0
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -50,7 +56,7 @@ jobs:
       - name: Verify release metadata
         run: npm run release:check
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
       - name: Verify npm package
         run: npm run pack:check
@@ -58,9 +64,7 @@ jobs:
       - name: Runtime dependency audit
         run: npm audit --omit=dev --audit-level=high
 
+      # Trusted Publishing: npm exchanges the GitHub OIDC token for a
+      # short-lived credential. No long-lived npm token is used or required.
       - name: Publish with provenance
         run: npm publish --access public --provenance
-        env:
-          # Needed only to bootstrap the first publication. Remove the secret
-          # after configuring npm Trusted Publishing for this workflow.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

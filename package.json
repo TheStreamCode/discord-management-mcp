@@ -10,7 +10,10 @@
     "url": "https://mikesoft.it"
   },
   "homepage": "https://github.com/TheStreamCode/discord-management-mcp#readme",
-  "repository": "github:TheStreamCode/discord-management-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheStreamCode/discord-management-mcp.git"
+  },
   "bugs": {
     "url": "https://github.com/TheStreamCode/discord-management-mcp/issues"
   },

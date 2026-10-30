@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Added
+
+- A `Publish to MCP Registry` workflow that publishes `server.json` with GitHub OIDC, pins
+  `mcp-publisher` and verifies its release checksum. The official registry entry for
+  `io.github.TheStreamCode/discord-management-mcp` is now maintained from CI without stored
+  credentials.
+
 ## 0.2.0 - 2026-10-30
 
 ### Added

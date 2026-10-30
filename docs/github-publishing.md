@@ -7,15 +7,16 @@ Before creating a release:
 1. Confirm the worktree contains only the intended release changes.
 2. Confirm `.env.local`, `backups/`, `node_modules/`, `dist/`, coverage, logs, and package tarballs are not tracked.
 3. Update the version in `package.json` and `package-lock.json`.
-4. Add the matching section to `CHANGELOG.md` and update `CITATION.cff`.
+4. Add the matching section to `CHANGELOG.md`, update `CITATION.cff`, and bump the version in `server.json` so it matches `package.json`.
 5. Run:
 
    ```bash
    npm ci
    npm run release:check -- vX.Y.Z
    npm run preflight
+   npm run verify:mcp
    npm run pack:check
-   npm audit --omit=dev
+   npm audit --omit=dev --audit-level=high
    ```
 
 6. Inspect the `npm run pack:check` manifest. It must contain the compiled `dist/` entrypoint and must not contain secrets, backups, source maps with private paths, or the repository hero image.
@@ -30,7 +31,9 @@ token stored as the `NPM_TOKEN` repository secret. Patch releases continue to us
 Trusted Publishing is independently confirmed on npmjs.com.
 
 The workflow grants `id-token: write`, runs on a GitHub-hosted runner, verifies source and release
-metadata, and publishes with npm provenance.
+metadata, and publishes with npm provenance. It also runs in the `npm` environment, verifies that the
+release commit is an ancestor of `main`, re-runs `pack:check`, and blocks on the runtime dependency
+audit before publishing.
 
 ### Pending: migrate to Trusted Publishing
 

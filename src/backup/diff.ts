@@ -177,6 +177,11 @@ function changedFields(
   const changes: string[] = [];
 
   for (const key of keys) {
+    // v1 backups predate gradient role colors and voice channel settings, so a
+    // missing field means "not captured", not "clear the live value".
+    if (V2_ONLY_FIELDS.has(key) && (before[key] === undefined || after[key] === undefined)) {
+      continue;
+    }
     if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
       changes.push(key);
     }
@@ -184,3 +189,5 @@ function changedFields(
 
   return changes;
 }
+
+const V2_ONLY_FIELDS = new Set(["colors", "bitrate", "userLimit", "rtcRegion"]);

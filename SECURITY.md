@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Security fixes target the latest published `0.1.x` release and the current `main` branch.
+Security fixes target the latest published `0.2.x` release and the current `main` branch.
 Older versions are not patched; upgrade to the newest release before reporting an issue.
 
 ## Reporting A Vulnerability

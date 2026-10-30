@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
 import { safeErrorMessage } from "../errors.js";
+import { withMutationQueue } from "../mutationQueue.js";
 import { errorResponse, successResponse } from "../responses.js";
 import { requireConfirmation, requireDestructiveBackupForGuild } from "../safety.js";
 import {
@@ -33,6 +34,9 @@ const channelTypeByName = {
   stage: ChannelType.GuildStageVoice,
 } as const;
 
+const voiceChannelTypes = new Set<number>([ChannelType.GuildVoice, ChannelType.GuildStageVoice]);
+const rtcRegionSchema = z.string().trim().min(1).max(64);
+
 const confirmSchema = {
   confirm: z.boolean().optional(),
   reason: auditReasonSchema,
@@ -49,6 +53,9 @@ const channelMutationResultSchema = {
   targetType: z.string().optional(),
   updated: z.record(z.string(), z.unknown()).optional(),
   positions: z.array(z.object({ channelId: z.string(), position: z.number() })).optional(),
+  status: z.string().nullable().optional(),
+  cleared: z.boolean().optional(),
+  note: z.string().optional(),
   error: z.string().optional(),
 };
 
@@ -57,7 +64,7 @@ type EditableGuildChannel = {
   name: string;
   guildId: string;
   type: ChannelType;
-  editable: boolean;
+  manageable: boolean;
   edit(options: GuildChannelEditOptions): Promise<EditableGuildChannel>;
   delete(reason?: string): Promise<unknown>;
   permissionOverwrites: {
@@ -88,6 +95,21 @@ function compactObject<T extends Record<string, unknown>>(value: T): Partial<T> 
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as Partial<T>;
 }
 
+function validateVoiceFields(
+  values: { bitrate?: number; userLimit?: number; rtcRegion?: string | null },
+  channelType: number,
+  channelLabel: string,
+): void {
+  const hasVoiceField =
+    values.bitrate !== undefined || values.userLimit !== undefined || values.rtcRegion !== undefined;
+
+  if (hasVoiceField && !voiceChannelTypes.has(channelType)) {
+    throw new Error(
+      `bitrate, userLimit, and rtcRegion are only supported on voice and stage channels (${channelLabel}).`,
+    );
+  }
+}
+
 async function getEditableChannel(
   discord: DiscordClientManager,
   channelId: string,
@@ -95,12 +117,19 @@ async function getEditableChannel(
   const client = await discord.getClient();
   const channel = await client.channels.fetch(channelId).catch(() => null);
 
-  if (!channel || !("guildId" in channel) || !("editable" in channel) || !("edit" in channel)) {
+  if (
+    !channel ||
+    !("guildId" in channel) ||
+    typeof (channel as { edit?: unknown }).edit !== "function"
+  ) {
     throw new Error(`Discord guild channel not found or unsupported: ${channelId}`);
   }
 
   const editableChannel = channel as unknown as EditableGuildChannel;
-  if (!editableChannel.editable) {
+  // `editable` only exists on messages, roles, and threads in discord.js 14;
+  // guild channels expose `manageable` instead. Checking the wrong getter made
+  // every channel update, delete, and overwrite fail against real Discord.
+  if (editableChannel.manageable === false) {
     throw new Error(`Bot cannot edit channel due to missing permissions or hierarchy: ${channelId}`);
   }
 
@@ -112,7 +141,7 @@ export function registerChannelTools(
   discord: DiscordClientManager,
   config: ServerConfig,
 ): void {
-  const registerTool = defaultOutputToolRegistrar(server);
+  const registerTool = withMutationQueue(defaultOutputToolRegistrar(server));
 
   registerTool(
     "discord_create_channel",
@@ -129,6 +158,7 @@ export function registerChannelTools(
         rateLimitPerUser: z.number().int().min(0).max(21_600).optional(),
         userLimit: z.number().int().min(0).max(99).optional(),
         bitrate: z.number().int().min(8_000).max(384_000).optional(),
+        rtcRegion: rtcRegionSchema.nullable().optional(),
         ...confirmSchema,
       },
       outputSchema: channelMutationResultSchema,
@@ -137,6 +167,7 @@ export function registerChannelTools(
     async (input) => {
       try {
         requireConfirmation(input);
+        validateVoiceFields(input, channelTypeByName[input.type], input.type);
         const guild = await discord.getGuild(input.guildId);
         const channel = await guild.channels.create({
           name: input.name,
@@ -147,6 +178,7 @@ export function registerChannelTools(
           rateLimitPerUser: input.rateLimitPerUser,
           userLimit: input.userLimit,
           bitrate: input.bitrate,
+          rtcRegion: input.rtcRegion ?? undefined,
           reason: input.reason,
         });
 
@@ -172,7 +204,7 @@ export function registerChannelTools(
     "discord_update_channel",
     {
       title: "Update Discord channel",
-      description: "Update editable properties on a Discord guild channel.",
+      description: "Update editable properties on a Discord guild channel, including voice bitrate, user limit, and RTC region.",
       inputSchema: {
         channelId: discordSnowflakeSchema,
         name: z.string().trim().min(1).max(100).optional(),
@@ -180,6 +212,9 @@ export function registerChannelTools(
         nsfw: z.boolean().optional(),
         rateLimitPerUser: z.number().int().min(0).max(21_600).optional(),
         parentId: discordSnowflakeSchema.nullable().optional(),
+        userLimit: z.number().int().min(0).max(99).optional(),
+        bitrate: z.number().int().min(8_000).max(384_000).optional(),
+        rtcRegion: rtcRegionSchema.nullable().optional(),
         ...confirmSchema,
       },
       outputSchema: channelMutationResultSchema,
@@ -188,14 +223,27 @@ export function registerChannelTools(
     async (input) => {
       try {
         requireConfirmation(input);
-        requireAtLeastOneInputField(input, ["name", "topic", "nsfw", "rateLimitPerUser", "parentId"]);
+        requireAtLeastOneInputField(input, [
+          "name",
+          "topic",
+          "nsfw",
+          "rateLimitPerUser",
+          "parentId",
+          "userLimit",
+          "bitrate",
+          "rtcRegion",
+        ]);
         const channel = await getEditableChannel(discord, input.channelId);
+        validateVoiceFields(input, channel.type, `channel ${input.channelId}`);
         const updates = compactObject({
           name: input.name,
           topic: input.topic,
           nsfw: input.nsfw,
           rateLimitPerUser: input.rateLimitPerUser,
           parent: input.parentId,
+          userLimit: input.userLimit,
+          bitrate: input.bitrate,
+          rtcRegion: input.rtcRegion,
           reason: input.reason,
         });
 
@@ -237,7 +285,7 @@ export function registerChannelTools(
       try {
         requireConfirmation(input);
         const channel = await getEditableChannel(discord, input.channelId);
-        await requireDestructiveBackupForGuild(input, config.backupDir, channel.guildId);
+        await requireDestructiveBackupForGuild(input, config.backupDir, channel.guildId, config.projectRoot);
         await channel.delete(input.reason);
 
         return successResponse("Channel deleted.", {
@@ -269,6 +317,8 @@ export function registerChannelTools(
         targetType: z.enum(["role", "member"]),
         allow: z.array(z.string().min(1).max(100)).max(100),
         deny: z.array(z.string().min(1).max(100)).max(100),
+        backupId: backupIdInputSchema.nullable().optional(),
+        allowWithoutBackup: z.boolean().optional(),
         ...confirmSchema,
       },
       outputSchema: channelMutationResultSchema,
@@ -279,6 +329,7 @@ export function registerChannelTools(
         requireConfirmation(input);
         validatePermissionNames([...input.allow, ...input.deny]);
         const channel = await getEditableChannel(discord, input.channelId);
+        await requireDestructiveBackupForGuild(input, config.backupDir, channel.guildId, config.projectRoot);
         const guild = await discord.getGuild(channel.guildId);
         if (input.targetType === "role") {
           const role = await guild.roles.fetch(input.targetId).catch(() => null);
@@ -364,6 +415,56 @@ export function registerChannelTools(
           action: "discord_reorder_channels",
           guildId: input.guildId,
           positions: input.positions,
+          error: safeErrorMessage(error),
+        });
+      }
+    },
+  );
+
+  registerTool(
+    "discord_set_voice_channel_status",
+    {
+      title: "Set Discord voice channel status",
+      description:
+        "Set or clear the status text shown on a voice channel. Uses the Discord REST voice-status endpoint and requires the bot to be allowed to manage the channel.",
+      inputSchema: {
+        channelId: discordSnowflakeSchema,
+        status: z.string().trim().min(1).max(500).nullable(),
+        ...confirmSchema,
+      },
+      outputSchema: channelMutationResultSchema,
+      annotations: additiveDiscordAnnotations,
+    },
+    async (input) => {
+      try {
+        requireConfirmation(input);
+        const channel = await getEditableChannel(discord, input.channelId);
+        if (!voiceChannelTypes.has(channel.type)) {
+          throw new Error(
+            `Voice channel status is only supported on voice and stage channels: ${input.channelId}`,
+          );
+        }
+
+        const client = await discord.getClient();
+        await client.rest.put(`/channels/${input.channelId}/voice-status`, {
+          body: { status: input.status },
+          reason: input.reason,
+        });
+
+        const cleared = input.status === null;
+        return successResponse(cleared ? "Voice channel status cleared." : "Voice channel status updated.", {
+          ok: true,
+          action: "discord_set_voice_channel_status",
+          channelId: input.channelId,
+          guildId: channel.guildId,
+          status: input.status,
+          cleared,
+        });
+      } catch (error) {
+        return errorResponse("Failed to set voice channel status.", {
+          ok: false,
+          action: "discord_set_voice_channel_status",
+          channelId: input.channelId,
           error: safeErrorMessage(error),
         });
       }

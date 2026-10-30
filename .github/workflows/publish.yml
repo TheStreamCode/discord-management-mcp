@@ -1,6 +1,6 @@
 name: Publish to npm
 
-on:
+"on":
   release:
     types:
       - published
@@ -18,6 +18,9 @@ jobs:
     name: publish
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Publication waits for the npm environment protection rules configured in
+    # repository settings. Keep required reviewers there, not in this workflow.
+    environment: npm
 
     steps:
       - name: Checkout
@@ -30,6 +33,14 @@ jobs:
           registry-url: https://registry.npmjs.org/
           package-manager-cache: false
 
+      # Only publish commits that belong to main. A depth-limited fetch would
+      # create a shallow boundary and make merge-base report a false negative
+      # when main advanced after the tag, so fetch the full main history.
+      - name: Verify release commit is on main
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
       - name: Install dependencies
         run: npm ci
 
@@ -40,6 +51,12 @@ jobs:
         run: npm run release:check
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+
+      - name: Verify npm package
+        run: npm run pack:check
+
+      - name: Runtime dependency audit
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Publish with provenance
         run: npm publish --access public --provenance

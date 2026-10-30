@@ -4,11 +4,13 @@ import {
   GuildExplicitContentFilter,
   GuildVerificationLevel,
   type GuildEditOptions,
+  type IncidentActions,
 } from "discord.js";
 import { z } from "zod";
 import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
 import { safeErrorMessage } from "../errors.js";
+import { withMutationQueue } from "../mutationQueue.js";
 import { errorResponse, successResponse } from "../responses.js";
 import { requireConfirmation, requireDestructiveBackupForGuild } from "../safety.js";
 import {
@@ -26,6 +28,39 @@ import {
 } from "../toolSchemas.js";
 
 const enumInput = z.union([z.string(), z.number()]);
+const incidentWindowDateSchema = z.string().datetime().nullable().optional();
+const MAX_INCIDENT_WINDOW_MS = 24 * 60 * 60 * 1_000;
+
+function incidentDate(value: string | null | undefined, field: string): Date | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    throw new Error(`${field} must be an ISO 8601 date-time.`);
+  }
+
+  const now = Date.now();
+  if (timestamp <= now) {
+    throw new Error(`${field} must be in the future.`);
+  }
+  if (timestamp > now + MAX_INCIDENT_WINDOW_MS) {
+    throw new Error(`${field} must be at most 24 hours from now.`);
+  }
+
+  return new Date(timestamp);
+}
+
+function incidentActionsResult(actions: IncidentActions): Record<string, unknown> {
+  return {
+    invitesDisabledUntil: actions.invitesDisabledUntil?.toISOString() ?? null,
+    dmsDisabledUntil: actions.dmsDisabledUntil?.toISOString() ?? null,
+  };
+}
 
 function guildEditOptions(input: {
   name?: string;
@@ -68,13 +103,14 @@ export function registerServerConfigTools(
   discord: DiscordClientManager,
   config: ServerConfig,
 ): void {
-  const registerTool = defaultOutputToolRegistrar(server);
+  const registerTool = withMutationQueue(defaultOutputToolRegistrar(server));
 
   registerTool(
     "discord_update_guild_settings",
     {
       title: "Update Discord guild settings",
-      description: "Update basic guild settings such as name, description, moderation levels, locale, and AFK timeout.",
+      description:
+        "Update basic guild settings such as name, description, moderation levels, locale, and AFK timeout. Requires a backupId or allowWithoutBackup.",
       annotations: idempotentDiscordMutationAnnotations,
       inputSchema: {
         guildId: discordSnowflakeSchema,
@@ -85,6 +121,8 @@ export function registerServerConfigTools(
         defaultMessageNotifications: enumInput.optional(),
         preferredLocale: z.string().min(2).max(32).optional(),
         afkTimeout: z.number().int().positive().optional(),
+        backupId: backupIdInputSchema.optional(),
+        allowWithoutBackup: z.boolean().optional(),
         confirm: z.boolean().optional(),
         reason: auditReasonSchema,
       },
@@ -101,6 +139,7 @@ export function registerServerConfigTools(
           "preferredLocale",
           "afkTimeout",
         ]);
+        await requireDestructiveBackupForGuild(input, config.backupDir, input.guildId, config.projectRoot);
         const guild = await discord.getGuild(input.guildId);
         const updated = await guild.edit(guildEditOptions(input));
         return successResponse("Guild settings updated.", {
@@ -228,14 +267,61 @@ export function registerServerConfigTools(
         const client = await discord.getClient();
         const webhook = await client.fetchWebhook(input.webhookId);
         const guildId = (webhook as { guildId?: string | null }).guildId;
-        if (input.allowWithoutBackup !== true && !guildId) {
-          throw new Error("Cannot verify webhook backup because Discord did not return a guildId.");
+        if (guildId) {
+          await requireDestructiveBackupForGuild(input, config.backupDir, guildId, config.projectRoot);
+        } else if (input.allowWithoutBackup !== true) {
+          throw new Error(
+            "Cannot verify webhook backup because Discord did not return a guildId. Pass allowWithoutBackup: true to acknowledge that the target guild cannot be verified.",
+          );
         }
-        await requireDestructiveBackupForGuild(input, config.backupDir, guildId ?? "unknown");
         await webhook.delete(input.reason);
         return successResponse("Webhook deleted.", { webhookId: input.webhookId });
       } catch (error) {
         return errorResponse("Failed to delete webhook.", { error: safeErrorMessage(error) });
+      }
+    },
+  );
+
+  registerTool(
+    "discord_set_incident_actions",
+    {
+      title: "Set Discord incident actions",
+      description:
+        "Temporarily disable guild invites and/or DMs during a raid or incident. Emergency action: no backup is required, each window is capped at 24 hours, and null re-enables immediately.",
+      annotations: destructiveDiscordAnnotations,
+      inputSchema: {
+        guildId: discordSnowflakeSchema,
+        invitesDisabledUntil: incidentWindowDateSchema,
+        dmsDisabledUntil: incidentWindowDateSchema,
+        confirm: z.boolean().optional(),
+        reason: auditReasonSchema,
+      },
+    },
+    async (input) => {
+      try {
+        requireConfirmation(input);
+        requireAtLeastOneInputField(input, ["invitesDisabledUntil", "dmsDisabledUntil"]);
+        const invitesDisabledUntil = incidentDate(input.invitesDisabledUntil, "invitesDisabledUntil");
+        const dmsDisabledUntil = incidentDate(input.dmsDisabledUntil, "dmsDisabledUntil");
+        const guild = await discord.getGuild(input.guildId);
+        const updated = await guild.setIncidentActions({
+          invitesDisabledUntil,
+          dmsDisabledUntil,
+        });
+
+        return successResponse("Guild incident actions updated.", {
+          guildId: guild.id,
+          reason: input.reason ?? null,
+          actions: incidentActionsResult(updated),
+          note: "Incident actions revert automatically at the configured timestamps; null means the restriction is lifted.",
+        });
+      } catch (error) {
+        return errorResponse("Failed to set guild incident actions.", {
+          guildId: input.guildId,
+          error: safeErrorMessage(error),
+          nextStep:
+            "Grant the bot Manage Guild and pass ISO 8601 timestamps within the next 24 hours, or null to re-enable invites/DMs.",
+        });
       }
     },
   );

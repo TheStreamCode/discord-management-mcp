@@ -6,21 +6,25 @@ import {
   GuildScheduledEventEntityType,
   GuildScheduledEventPrivacyLevel,
   GuildScheduledEventStatus,
+  PermissionFlagsBits,
   type AutoModerationActionOptions,
   type AutoModerationRuleCreateOptions,
   type AutoModerationRuleEditOptions,
+  type GuildBan,
   type GuildScheduledEventCreateOptions,
 } from "discord.js";
 import { z } from "zod";
 import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
 import { safeErrorMessage } from "../errors.js";
+import { withMutationQueue } from "../mutationQueue.js";
 import { errorResponse, successResponse } from "../responses.js";
 import { requireConfirmation, requireDestructiveBackupForGuild } from "../safety.js";
 import {
   additiveDiscordAnnotations,
   destructiveDiscordAnnotations,
   idempotentDiscordMutationAnnotations,
+  readOnlyDiscordAnnotations,
 } from "../toolAnnotations.js";
 import { defaultOutputToolRegistrar } from "../toolRegistration.js";
 import {
@@ -237,7 +241,7 @@ export function registerModerationTools(
   discord: DiscordClientManager,
   config: ServerConfig,
 ): void {
-  const registerTool = defaultOutputToolRegistrar(server);
+  const registerTool = withMutationQueue(defaultOutputToolRegistrar(server));
 
   registerTool(
     "discord_timeout_member",
@@ -289,7 +293,7 @@ export function registerModerationTools(
     async (input) => {
       try {
         requireConfirmation(input);
-        await requireDestructiveBackupForGuild(input, config.backupDir, input.guildId);
+        await requireDestructiveBackupForGuild(input, config.backupDir, input.guildId, config.projectRoot);
         const guild = await discord.getGuild(input.guildId);
         const member = await guild.members.fetch(input.userId);
         await member.kick(input.reason);
@@ -319,7 +323,7 @@ export function registerModerationTools(
     async (input) => {
       try {
         requireConfirmation(input);
-        await requireDestructiveBackupForGuild(input, config.backupDir, input.guildId);
+        await requireDestructiveBackupForGuild(input, config.backupDir, input.guildId, config.projectRoot);
         const guild = await discord.getGuild(input.guildId);
         await guild.members.ban(input.userId, {
           deleteMessageSeconds: input.deleteMessageSeconds,
@@ -395,7 +399,7 @@ export function registerModerationTools(
         if (!("guildId" in channel) || typeof channel.guildId !== "string") {
           throw new Error(`Channel is not a guild channel: ${input.channelId}`);
         }
-        await requireDestructiveBackupForGuild(input, config.backupDir, channel.guildId);
+        await requireDestructiveBackupForGuild(input, config.backupDir, channel.guildId, config.projectRoot);
 
         const deleteTarget = input.messageIds ?? input.limit;
         if (!deleteTarget) {
@@ -533,7 +537,7 @@ export function registerModerationTools(
     async (input) => {
       try {
         requireConfirmation(input);
-        await requireDestructiveBackupForGuild(input, config.backupDir, input.guildId);
+        await requireDestructiveBackupForGuild(input, config.backupDir, input.guildId, config.projectRoot);
         const guild = await discord.getGuild(input.guildId);
         const rule = await guild.autoModerationRules.fetch(input.ruleId);
         if (!rule) {
@@ -575,6 +579,12 @@ export function registerModerationTools(
         requireConfirmation(input);
         validateScheduledEventCreate(input);
         const guild = await discord.getGuild(input.guildId);
+        const me = await guild.members.fetchMe();
+        if (!me.permissions.has(PermissionFlagsBits.CreateEvents)) {
+          throw new Error(
+            "Bot lacks the CREATE_EVENTS permission required to create scheduled events. Grant Create Events (and Manage Events for later edits) to the bot role.",
+          );
+        }
         const event = await guild.scheduledEvents.create(normalizeScheduledEventCreate(input));
         return successResponse("Scheduled event created.", {
           guildId: guild.id,
@@ -665,7 +675,7 @@ export function registerModerationTools(
     async (input) => {
       try {
         requireConfirmation(input);
-        await requireDestructiveBackupForGuild(input, config.backupDir, input.guildId);
+        await requireDestructiveBackupForGuild(input, config.backupDir, input.guildId, config.projectRoot);
         const guild = await discord.getGuild(input.guildId);
         const event = await guild.scheduledEvents.fetch(input.eventId);
         if (!event) {
@@ -679,4 +689,108 @@ export function registerModerationTools(
       }
     },
   );
+
+  registerTool(
+    "discord_list_bans",
+    {
+      title: "List Discord bans",
+      description: "List guild bans with pagination. Requires the Ban Members permission.",
+      inputSchema: {
+        guildId: discordSnowflakeSchema,
+        limit: z.number().int().min(1).max(1_000).default(100),
+        after: discordSnowflakeSchema.optional(),
+        before: discordSnowflakeSchema.optional(),
+      },
+      annotations: readOnlyDiscordAnnotations,
+    },
+    async ({ guildId, limit, after, before }) => {
+      if (after !== undefined && before !== undefined) {
+        return errorResponse("Invalid ban pagination combination.", {
+          guildId,
+          limit,
+          error: "before and after are mutually exclusive: provide at most one pagination cursor.",
+        });
+      }
+
+      try {
+        const guild = await discord.getGuild(guildId);
+        const bans = [
+          ...(await guild.bans.fetch({ limit, after, before, cache: false })).values(),
+        ].map(mapBan);
+        return successResponse(`Found ${bans.length} ban(s).`, {
+          guildId,
+          count: bans.length,
+          limit,
+          after: after ?? null,
+          before: before ?? null,
+          bans,
+        });
+      } catch (error) {
+        return errorResponse("Failed to list Discord bans.", {
+          guildId,
+          limit,
+          after: after ?? null,
+          before: before ?? null,
+          error: safeErrorMessage(error),
+        });
+      }
+    },
+  );
+
+  registerTool(
+    "discord_bulk_ban_members",
+    {
+      title: "Bulk ban Discord members",
+      description:
+        "Ban up to 200 users in one Discord request. Requires confirmation and either a backupId or allowWithoutBackup.",
+      annotations: destructiveDiscordAnnotations,
+      inputSchema: {
+        guildId: discordSnowflakeSchema,
+        userIds: z.array(discordSnowflakeSchema).min(1).max(200),
+        deleteMessageSeconds: z.number().int().min(0).max(604_800).optional(),
+        confirm: z.boolean().optional(),
+        reason: auditReasonSchema,
+        backupId: backupIdInputSchema.optional(),
+        allowWithoutBackup: z.boolean().optional(),
+      },
+    },
+    async (input) => {
+      try {
+        requireConfirmation(input);
+        requireUniqueValues(input.userIds, "userIds");
+        await requireDestructiveBackupForGuild(input, config.backupDir, input.guildId, config.projectRoot);
+        const guild = await discord.getGuild(input.guildId);
+        const result = await guild.bans.bulkCreate(input.userIds, {
+          deleteMessageSeconds: input.deleteMessageSeconds,
+          reason: input.reason,
+        });
+
+        return successResponse("Bulk ban request completed.", {
+          guildId: guild.id,
+          requestedCount: input.userIds.length,
+          banned: [...result.bannedUsers],
+          failed: [...result.failedUsers],
+          bannedCount: result.bannedUsers.length,
+          failedCount: result.failedUsers.length,
+          deleteMessageSeconds: input.deleteMessageSeconds ?? 0,
+        });
+      } catch (error) {
+        return errorResponse("Failed to bulk ban members.", {
+          guildId: input.guildId,
+          error: safeErrorMessage(error),
+        });
+      }
+    },
+  );
+}
+
+function mapBan(ban: GuildBan): Record<string, unknown> {
+  return {
+    userId: ban.user.id,
+    username: ban.user.username,
+    globalName: ban.user.globalName,
+    discriminator: ban.user.discriminator,
+    bot: ban.user.bot,
+    reason: ban.reason,
+  };
 }

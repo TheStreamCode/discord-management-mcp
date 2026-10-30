@@ -1,27 +1,32 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type {
-  ApplicationCommand,
-  AutoModerationRule,
-  Guild,
-  GuildBasedChannel,
-  GuildEmoji,
-  GuildMember,
-  GuildScheduledEvent,
-  Invite,
-  Message,
-  NonThreadGuildBasedChannel,
-  Role,
-  Sticker,
-  Webhook,
+import {
+  AuditLogEvent,
+  PermissionFlagsBits,
+  type ApplicationCommand,
+  type AutoModerationRule,
+  type Guild,
+  type GuildAuditLogsEntry,
+  type GuildBasedChannel,
+  type GuildEmoji,
+  type GuildMember,
+  type GuildScheduledEvent,
+  type Invite,
+  type Message,
+  type NonThreadGuildBasedChannel,
+  type Role,
+  type Sticker,
+  type Webhook,
 } from "discord.js";
 import { z } from "zod";
+import { summarizeChannelCoverage } from "../backup/snapshot.js";
 import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
 import { safeErrorMessage } from "../errors.js";
+import { withMutationQueue } from "../mutationQueue.js";
 import { errorResponse, successResponse } from "../responses.js";
 import { readOnlyDiscordAnnotations } from "../toolAnnotations.js";
 import { defaultOutputToolRegistrar } from "../toolRegistration.js";
-import { discordSnowflakeSchema } from "../toolSchemas.js";
+import { discordSnowflakeSchema, enumMember } from "../toolSchemas.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -387,16 +392,58 @@ function mapMessage(message: Message): JsonObject {
   };
 }
 
+const SHARDING_REQUIRED_PATTERN = /sharding is required|too many guilds|shardcount|shard count|sharding/i;
+
+function isShardingRequiredError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  if (code === "ShardingRequired") {
+    return true;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  return SHARDING_REQUIRED_PATTERN.test(message);
+}
+
+function mapAuditLogEntry(entry: GuildAuditLogsEntry): JsonObject {
+  return {
+    id: entry.id,
+    action: entry.action,
+    actionType: entry.actionType,
+    targetId: entry.targetId,
+    targetType: entry.targetType,
+    executorId: entry.executorId,
+    reason: entry.reason,
+    createdAt: toIsoDate(entry.createdAt),
+    changes: entry.changes.map((change) => ({
+      key: change.key,
+      old: change.old ?? null,
+      new: change.new ?? null,
+    })),
+  };
+}
+
+function channelCoverageWarning(complete: boolean): string {
+  const base = "Channels the bot cannot view are not captured.";
+  return complete
+    ? base
+    : `${base} Channel coverage could not be verified; channels the bot cannot view may be missing.`;
+}
+
 export function registerGuildTools(
   server: McpServer,
   discord: DiscordClientManager,
   config: ServerConfig,
 ): void {
-  const registerTool = defaultOutputToolRegistrar(server);
+  const registerTool = withMutationQueue(defaultOutputToolRegistrar(server));
 
   registerTool(
     "discord_list_guilds",
     {
+      title: "List Discord guilds",
       description: "List Discord guilds visible to the configured bot.",
       inputSchema: emptySchema,
       annotations: readOnlyDiscordAnnotations,
@@ -410,6 +457,13 @@ export function registerGuildTools(
           guilds,
         });
       } catch (error) {
+        if (isShardingRequiredError(error)) {
+          return errorResponse("Discord requires sharding for this bot.", {
+            error: errorText(error),
+            nextStep:
+              "The bot is in too many guilds for a single unsharded session. Run this server with sharding enabled (ShardingManager or shardCount 'auto'), or use tools that take a guildId explicitly instead of listing guilds.",
+          });
+        }
         return errorResponse("Failed to list Discord guilds.", {
           error: errorText(error),
         });
@@ -420,6 +474,7 @@ export function registerGuildTools(
   registerTool(
     "discord_get_guild",
     {
+      title: "Get Discord guild",
       description: "Get Discord guild metadata.",
       inputSchema: guildIdSchema,
       annotations: readOnlyDiscordAnnotations,
@@ -442,6 +497,7 @@ export function registerGuildTools(
   registerTool(
     "discord_list_channels",
     {
+      title: "List Discord channels",
       description: "List channels in a Discord guild.",
       inputSchema: guildIdSchema,
       annotations: readOnlyDiscordAnnotations,
@@ -449,14 +505,23 @@ export function registerGuildTools(
     async ({ guildId }) => {
       try {
         const guild = await discord.getGuild(guildId);
-        const channels = [...(await guild.channels.fetch()).values()]
-          .filter((channel): channel is NonThreadGuildBasedChannel => channel !== null)
-          .map(mapChannel);
-        return successResponse(`Found ${channels.length} channel(s).`, {
-          guildId,
-          count: channels.length,
-          channels,
-        });
+        const fetched = [...(await guild.channels.fetch()).values()]
+          .filter((channel): channel is NonThreadGuildBasedChannel => channel !== null);
+        const cached = [...guild.channels.cache.values()];
+        const coverage = summarizeChannelCoverage(fetched, cached);
+        const channels = fetched.map(mapChannel);
+        return successResponse(
+          `Found ${channels.length} channel(s), ${coverage.hiddenKeys.length} hidden.`,
+          {
+            guildId,
+            count: channels.length,
+            hiddenChannelCount: coverage.hiddenKeys.length,
+            hiddenChannelKeys: coverage.hiddenKeys,
+            coverageComplete: coverage.complete,
+            warning: channelCoverageWarning(coverage.complete),
+            channels,
+          },
+        );
       } catch (error) {
         return errorResponse("Failed to list Discord channels.", {
           guildId,
@@ -469,6 +534,7 @@ export function registerGuildTools(
   registerTool(
     "discord_get_channel",
     {
+      title: "Get Discord channel",
       description: "Get Discord channel metadata.",
       inputSchema: channelIdSchema,
       annotations: readOnlyDiscordAnnotations,
@@ -497,12 +563,25 @@ export function registerGuildTools(
   registerTool(
     "discord_list_channel_messages",
     {
+      title: "List Discord channel messages",
       description:
         "List recent messages from a text-based channel. Requires ENABLE_MESSAGE_CONTENT=true and the Discord Message Content privileged intent.",
       inputSchema: listMessagesSchema,
       annotations: readOnlyDiscordAnnotations,
     },
     async ({ guildId, channelId, limit, before, after, around }) => {
+      if ([before, after, around].filter((cursor) => cursor !== undefined).length > 1) {
+        return errorResponse("Invalid message pagination combination.", {
+          guildId,
+          channelId,
+          before: before ?? null,
+          after: after ?? null,
+          around: around ?? null,
+          error:
+            "before, after, and around are mutually exclusive: provide at most one pagination cursor.",
+        });
+      }
+
       if (!config.enableMessageContent) {
         return errorResponse("Message content reading is disabled.", {
           guildId,
@@ -571,6 +650,7 @@ export function registerGuildTools(
   registerTool(
     "discord_list_roles",
     {
+      title: "List Discord roles",
       description: "List roles in a Discord guild.",
       inputSchema: guildIdSchema,
       annotations: readOnlyDiscordAnnotations,
@@ -596,6 +676,7 @@ export function registerGuildTools(
   registerTool(
     "discord_get_role",
     {
+      title: "Get Discord role",
       description: "Get Discord role metadata.",
       inputSchema: roleIdSchema,
       annotations: readOnlyDiscordAnnotations,
@@ -624,6 +705,7 @@ export function registerGuildTools(
   registerTool(
     "discord_list_members",
     {
+      title: "List Discord members",
       description: "List guild members, capped at 1000.",
       inputSchema: listMembersSchema,
       annotations: readOnlyDiscordAnnotations,
@@ -655,6 +737,7 @@ export function registerGuildTools(
   registerTool(
     "discord_list_automod_rules",
     {
+      title: "List Discord AutoMod rules",
       description: "List AutoMod rules in a Discord guild.",
       inputSchema: guildIdSchema,
       annotations: readOnlyDiscordAnnotations,
@@ -682,6 +765,7 @@ export function registerGuildTools(
   registerTool(
     "discord_list_scheduled_events",
     {
+      title: "List Discord scheduled events",
       description: "List scheduled events in a Discord guild.",
       inputSchema: guildIdSchema,
       annotations: readOnlyDiscordAnnotations,
@@ -709,6 +793,7 @@ export function registerGuildTools(
   registerTool(
     "discord_list_webhooks",
     {
+      title: "List Discord webhooks",
       description: "List webhooks in a Discord guild without exposing tokens.",
       inputSchema: guildIdSchema,
       annotations: readOnlyDiscordAnnotations,
@@ -734,6 +819,7 @@ export function registerGuildTools(
   registerTool(
     "discord_list_invites",
     {
+      title: "List Discord invites",
       description: "List non-secret invite metadata in a Discord guild; invite codes and URLs are omitted.",
       inputSchema: guildIdSchema,
       annotations: readOnlyDiscordAnnotations,
@@ -759,6 +845,7 @@ export function registerGuildTools(
   registerTool(
     "discord_list_emojis",
     {
+      title: "List Discord emojis",
       description: "List emojis in a Discord guild.",
       inputSchema: guildIdSchema,
       annotations: readOnlyDiscordAnnotations,
@@ -784,6 +871,7 @@ export function registerGuildTools(
   registerTool(
     "discord_list_stickers",
     {
+      title: "List Discord stickers",
       description: "List stickers in a Discord guild.",
       inputSchema: guildIdSchema,
       annotations: readOnlyDiscordAnnotations,
@@ -809,6 +897,7 @@ export function registerGuildTools(
   registerTool(
     "discord_list_application_commands",
     {
+      title: "List Discord application commands",
       description: "List guild application commands.",
       inputSchema: guildIdSchema,
       annotations: readOnlyDiscordAnnotations,
@@ -827,6 +916,124 @@ export function registerGuildTools(
       } catch (error) {
         return errorResponse("Failed to list Discord application commands.", {
           guildId,
+          error: errorText(error),
+        });
+      }
+    },
+  );
+
+  registerTool(
+    "discord_list_audit_log",
+    {
+      title: "List Discord audit log entries",
+      description:
+        "Read recent Discord audit log entries. Requires the View Audit Log permission for the bot.",
+      inputSchema: {
+        ...guildIdSchema,
+        limit: z.number().int().min(1).max(100).default(50),
+        actionType: z.union([z.string().min(1).max(64), z.number().int()]).optional(),
+        userId: discordSnowflakeSchema.optional(),
+        before: discordSnowflakeSchema.optional(),
+        after: discordSnowflakeSchema.optional(),
+      },
+      annotations: readOnlyDiscordAnnotations,
+    },
+    async ({ guildId, limit, actionType, userId, before, after }) => {
+      if (before !== undefined && after !== undefined) {
+        return errorResponse("Invalid audit log pagination combination.", {
+          guildId,
+          limit,
+          error: "before and after are mutually exclusive: provide at most one pagination cursor.",
+        });
+      }
+
+      try {
+        const guild = await discord.getGuild(guildId);
+        const me = await guild.members.fetchMe();
+        if (!me.permissions.has(PermissionFlagsBits.ViewAuditLog)) {
+          throw new Error(
+            "Bot requires the View Audit Log permission to read the audit log.",
+          );
+        }
+
+        const logs = await guild.fetchAuditLogs({
+          limit,
+          type: actionType === undefined
+            ? undefined
+            : enumMember<AuditLogEvent>(actionType, AuditLogEvent, "actionType"),
+          user: userId,
+          before,
+          after,
+        });
+        const entries = [...logs.entries.values()].map(mapAuditLogEntry);
+
+        return successResponse(`Found ${entries.length} audit log entr(ies).`, {
+          guildId,
+          count: entries.length,
+          limit,
+          actionType: actionType ?? null,
+          userId: userId ?? null,
+          before: before ?? null,
+          after: after ?? null,
+          entries,
+        });
+      } catch (error) {
+        return errorResponse("Failed to list Discord audit log entries.", {
+          guildId,
+          limit,
+          actionType: actionType ?? null,
+          userId: userId ?? null,
+          before: before ?? null,
+          after: after ?? null,
+          error: errorText(error),
+          nextStep:
+            "Grant the bot View Audit Log and verify the actionType, userId, before, and after filters are valid Discord snowflakes or audit log action names.",
+        });
+      }
+    },
+  );
+
+  registerTool(
+    "discord_search_members",
+    {
+      title: "Search Discord members",
+      description:
+        "Search guild members by username or nickname. Requires ENABLE_GUILD_MEMBERS=true and the Guild Members privileged intent.",
+      inputSchema: {
+        ...guildIdSchema,
+        query: z.string().trim().min(1).max(100),
+        limit: z.number().int().min(1).max(1_000).default(100),
+      },
+      annotations: readOnlyDiscordAnnotations,
+    },
+    async ({ guildId, query, limit }) => {
+      if (!config.enableGuildMembers) {
+        return errorResponse("Guild member search is disabled.", {
+          guildId,
+          query,
+          guildMembersEnabled: false,
+          nextStep:
+            "Set ENABLE_GUILD_MEMBERS=true and enable the Server Members Intent in Discord Developer Portal > Bot > Privileged Gateway Intents.",
+        });
+      }
+
+      try {
+        const guild = await discord.getGuild(guildId);
+        const members = [
+          ...(await guild.members.search({ query, limit, cache: false })).values(),
+        ].map(mapMember);
+        return successResponse(`Found ${members.length} member(s).`, {
+          guildId,
+          query,
+          count: members.length,
+          limit,
+          members,
+        });
+      } catch (error) {
+        return errorResponse("Failed to search Discord members.", {
+          guildId,
+          query,
+          limit,
           error: errorText(error),
         });
       }

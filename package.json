@@ -1,6 +1,7 @@
 {
   "name": "discord-management-mcp",
-  "version": "0.1.2",
+  "mcpName": "io.github.TheStreamCode/discord-management-mcp",
+  "version": "0.2.0",
   "type": "module",
   "description": "Safe-by-default Discord management MCP server with JSON backups, restore planning, and guarded mutations.",
   "license": "MIT",
@@ -8,7 +9,7 @@
     "name": "Michael Gasperini",
     "url": "https://mikesoft.it"
   },
-  "homepage": "https://www.npmjs.com/package/discord-management-mcp",
+  "homepage": "https://github.com/TheStreamCode/discord-management-mcp#readme",
   "repository": "github:TheStreamCode/discord-management-mcp",
   "bugs": {
     "url": "https://github.com/TheStreamCode/discord-management-mcp/issues"
@@ -20,6 +21,13 @@
     "discord",
     "discord-management",
     "discord-bot",
+    "discord-mcp",
+    "discord-api",
+    "discord-admin",
+    "mcp-server",
+    "claude",
+    "cursor",
+    "codex",
     "backup",
     "rollback"
   ],
@@ -31,6 +39,7 @@
     "docs/configuration.md",
     "docs/design.md",
     "docs/safety-and-backups.md",
+    "docs/setup.md",
     "docs/tools.md",
     "examples",
     "README.md",
@@ -39,6 +48,8 @@
     "NOTICE",
     "SECURITY.md",
     "CONTRIBUTING.md",
+    "SUPPORT.md",
+    "server.json",
     ".env.example"
   ],
   "engines": {
@@ -62,6 +73,7 @@
     "check": "npm run lint && npm run typecheck && npm test",
     "preflight": "npm run check && npm run build",
     "pack:check": "npm pack --dry-run --json",
+    "verify:mcp": "node scripts/verify-mcp-surface.mjs",
     "release:check": "node scripts/verify-release.mjs",
     "prepack": "npm run build",
     "prepublishOnly": "npm run check"
@@ -71,9 +83,12 @@
     "discord.js": "^14.27.0",
     "zod": "^4.4.3"
   },
+  "overrides": {
+    "discord-api-types": "^0.38.57"
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^26.6.5",
+    "@types/node": "^24.13.3",
     "eslint": "^10.8.0",
     "tsx": "^4.23.1",
     "typescript": "^6.0.3",

@@ -1,15 +1,20 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ChannelType, OverwriteType, PermissionsBitField, type Guild } from "discord.js";
-import { z } from "zod";
-import type { ServerConfig } from "../config.js";
-import type { DiscordClientManager } from "../discordClient.js";
-import { safeErrorMessage } from "../errors.js";
-import { diffChannels, diffRoles } from "../backup/diff.js";
-import { createSnapshot } from "../backup/snapshot.js";
-import { listBackups, readSnapshot, writeSnapshot } from "../backup/store.js";
 import {
+  ChannelType,
+  OverwriteType,
+  PermissionsBitField,
+  type Guild,
+  type GuildChannelCreateOptions,
+  type RoleCreateOptions,
+  type RoleEditOptions,
+} from "discord.js";
+import { z } from "zod";
+import { diffChannels, diffRoles } from "../backup/diff.js";
+import {
+  computeRestorePlanHash,
   schemaVersion,
   type ChannelSnapshot,
+  type IdMap,
   type PermissionOverwriteSnapshot,
   type RestoreOperation,
   type RestorePlan,
@@ -17,6 +22,17 @@ import {
   type RoleSnapshot,
   type Snapshot,
 } from "../backup/schema.js";
+import { createSnapshot } from "../backup/snapshot.js";
+import {
+  backupDirectoryExists,
+  listBackups,
+  readSnapshot,
+  writeSnapshot,
+} from "../backup/store.js";
+import { assertBackupDirInsideProject, type ServerConfig } from "../config.js";
+import type { DiscordClientManager } from "../discordClient.js";
+import { safeErrorMessage } from "../errors.js";
+import { withExclusiveMutation, withMutationQueue } from "../mutationQueue.js";
 import { errorResponse, successResponse } from "../responses.js";
 import { requireConfirmation } from "../safety.js";
 import {
@@ -25,15 +41,146 @@ import {
   localReadOnlyAnnotations,
   readOnlyDiscordAnnotations,
 } from "../toolAnnotations.js";
-import { defaultOutputToolRegistrar, defaultToolOutputSchema } from "../toolRegistration.js";
+import { defaultOutputToolRegistrar } from "../toolRegistration.js";
 import { auditReasonSchema, backupIdInputSchema, discordSnowflakeSchema } from "../toolSchemas.js";
+
+const snapshotCountsSchema = z.object({
+  roles: z.number().int(),
+  channels: z.number().int(),
+  autoModRules: z.number().int(),
+  scheduledEvents: z.number().int(),
+  webhooks: z.number().int(),
+  invites: z.number().int(),
+  emojis: z.number().int(),
+  stickers: z.number().int(),
+  applicationCommands: z.number().int(),
+});
+
+const channelCoverageSchema = z.object({
+  fetched: z.number().int(),
+  cacheSize: z.number().int(),
+  hiddenKeys: z.array(z.string()),
+  complete: z.boolean(),
+});
+
+const snapshotCoverageSchema = z.object({
+  channels: channelCoverageSchema,
+});
+
+const snapshotWarningSchema = z.object({
+  section: z.string(),
+  message: z.string(),
+});
+
+const restoreWarningSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  resource: z.string().optional(),
+  key: z.string().optional(),
+  section: z.string().optional(),
+});
+
+const restoreOperationSchema = z.object({
+  type: z.enum(["create", "update", "delete", "skip"]),
+  resource: z.enum(["guild", "role", "channel", "permissionOverwrite", "autoModRule", "scheduledEvent"]),
+  key: z.string(),
+  before: z.unknown().optional(),
+  after: z.unknown().optional(),
+  changes: z.array(z.string()).optional(),
+  reason: z.string().optional(),
+});
+
+const restorePlanSchema = z.object({
+  schemaVersion: z.number().int(),
+  sourceBackupId: z.string(),
+  targetGuildId: z.string(),
+  operations: z.array(restoreOperationSchema),
+  warnings: z.array(restoreWarningSchema),
+  idMap: z.record(z.string(), z.string()),
+  planHash: z.string(),
+});
+
+const operationSummarySchema = z.object({
+  create: z.number().int(),
+  update: z.number().int(),
+  delete: z.number().int(),
+  skip: z.number().int(),
+  total: z.number().int(),
+});
+
+const backupCreateOutputSchema = z.object({
+  ok: z.boolean(),
+  backupId: z.string().optional(),
+  guildId: z.string().optional(),
+  capturedAt: z.string().optional(),
+  counts: snapshotCountsSchema.optional(),
+  warnings: z.array(snapshotWarningSchema).optional(),
+  coverage: snapshotCoverageSchema.optional(),
+  error: z.string().optional(),
+});
+
+const backupListOutputSchema = z.object({
+  ok: z.boolean(),
+  backupIds: z.array(z.string()).optional(),
+  count: z.number().int().optional(),
+  backupDirectoryExists: z.boolean().optional(),
+  note: z.string().optional(),
+  error: z.string().optional(),
+});
+
+const backupReadOutputSchema = z.object({
+  ok: z.boolean(),
+  backupId: z.string().optional(),
+  guildId: z.string().optional(),
+  guildName: z.string().optional(),
+  capturedAt: z.string().optional(),
+  counts: snapshotCountsSchema.optional(),
+  warnings: z.array(snapshotWarningSchema).optional(),
+  coverage: snapshotCoverageSchema.optional(),
+  snapshotReturned: z.boolean().optional(),
+  note: z.string().optional(),
+  error: z.string().optional(),
+});
+
+const backupDiffOutputSchema = z.object({
+  ok: z.boolean(),
+  beforeBackupId: z.string().optional(),
+  afterBackupId: z.string().optional(),
+  operations: z.array(restoreOperationSchema).optional(),
+  summary: operationSummarySchema.optional(),
+  error: z.string().optional(),
+});
+
+const restorePlanOutputSchema = z.object({
+  ok: z.boolean(),
+  plan: restorePlanSchema.optional(),
+  summary: operationSummarySchema.optional(),
+  safetyMessage: z.string().optional(),
+  backupId: z.string().optional(),
+  targetGuildId: z.string().optional(),
+  error: z.string().optional(),
+});
+
+const restoreApplyOutputSchema = z.object({
+  ok: z.boolean(),
+  preRestoreBackupId: z.string().nullable().optional(),
+  sourceBackupId: z.string().optional(),
+  targetGuildId: z.string().optional(),
+  applied: z.array(z.unknown()).optional(),
+  skipped: z.array(z.unknown()).optional(),
+  failed: z.unknown().optional(),
+  warnings: z.array(restoreWarningSchema).optional(),
+  expectedPlanHash: z.string().optional(),
+  actualPlanHash: z.string().optional(),
+  error: z.string().optional(),
+});
 
 export function registerBackupTools(
   server: McpServer,
   discord: DiscordClientManager,
   config: ServerConfig,
 ): void {
-  const registerTool = defaultOutputToolRegistrar(server);
+  const registerTool = withMutationQueue(defaultOutputToolRegistrar(server));
 
   registerTool(
     "discord_backup_create",
@@ -43,13 +190,17 @@ export function registerBackupTools(
       inputSchema: {
         guildId: discordSnowflakeSchema.describe("Discord guild ID to snapshot."),
       },
-      outputSchema: defaultToolOutputSchema,
+      outputSchema: backupCreateOutputSchema,
       annotations: additiveDiscordAnnotations,
     },
     async ({ guildId }) => {
       try {
+        assertBackupDirInsideProject(config.projectRoot, config.backupDir);
         const guild = await discord.getGuild(guildId);
         const snapshot = await createSnapshot(guild);
+        // Re-check after the Discord round trips: a junction created while the
+        // snapshot was being captured must not redirect the write.
+        assertBackupDirInsideProject(config.projectRoot, config.backupDir);
         const backupId = await writeSnapshot(config.backupDir, snapshot, new Date(snapshot.capturedAt));
 
         return successResponse(`Created backup ${backupId} for guild ${snapshot.guild.name}.`, {
@@ -58,6 +209,7 @@ export function registerBackupTools(
           capturedAt: snapshot.capturedAt,
           counts: snapshotCounts(snapshot),
           warnings: snapshot.warnings ?? [],
+          coverage: snapshot.coverage,
         });
       } catch (error) {
         return errorResponse("Failed to create Discord backup.", {
@@ -73,19 +225,33 @@ export function registerBackupTools(
       title: "List Discord Backups",
       description: "List stored Discord backup snapshot IDs, newest first.",
       inputSchema: {},
-      outputSchema: defaultToolOutputSchema,
+      outputSchema: backupListOutputSchema,
       annotations: localReadOnlyAnnotations,
     },
     async () => {
       try {
+        assertBackupDirInsideProject(config.projectRoot, config.backupDir);
+        if (!(await backupDirectoryExists(config.backupDir))) {
+          return successResponse("No Discord backup directory exists yet.", {
+            backupIds: [],
+            count: 0,
+            backupDirectoryExists: false,
+            note: "The configured BACKUP_DIR does not exist yet. Run discord_backup_create to create the first backup.",
+          });
+        }
+
         const backupIds = await listBackups(config.backupDir);
 
         return successResponse(`Found ${backupIds.length} Discord backup(s).`, {
           backupIds,
           count: backupIds.length,
+          backupDirectoryExists: true,
         });
       } catch (error) {
         return errorResponse("Failed to list Discord backups.", {
+          backupIds: [],
+          count: 0,
+          backupDirectoryExists: false,
           error: safeErrorMessage(error),
         });
       }
@@ -100,11 +266,12 @@ export function registerBackupTools(
       inputSchema: {
         backupId: backupIdInputSchema.describe("Backup file ID returned by discord_backup_list or create."),
       },
-      outputSchema: defaultToolOutputSchema,
+      outputSchema: backupReadOutputSchema,
       annotations: localReadOnlyAnnotations,
     },
     async ({ backupId }) => {
       try {
+        assertBackupDirInsideProject(config.projectRoot, config.backupDir);
         const snapshot = await readSnapshot(config.backupDir, backupId);
 
         return successResponse(`Read backup ${backupId}.`, {
@@ -114,6 +281,7 @@ export function registerBackupTools(
           capturedAt: snapshot.capturedAt,
           counts: snapshotCounts(snapshot),
           warnings: snapshot.warnings ?? [],
+          coverage: snapshot.coverage,
           snapshotReturned: false,
           note: "The backup payload remains local and is intentionally not returned by this tool.",
         });
@@ -135,11 +303,12 @@ export function registerBackupTools(
         beforeBackupId: backupIdInputSchema.describe("Older or source backup ID."),
         afterBackupId: backupIdInputSchema.describe("Newer or target backup ID."),
       },
-      outputSchema: defaultToolOutputSchema,
+      outputSchema: backupDiffOutputSchema,
       annotations: localReadOnlyAnnotations,
     },
     async ({ beforeBackupId, afterBackupId }) => {
       try {
+        assertBackupDirInsideProject(config.projectRoot, config.backupDir);
         const before = await readSnapshot(config.backupDir, beforeBackupId);
         const after = await readSnapshot(config.backupDir, afterBackupId);
         const operations = [...diffRoles(before.roles, after.roles), ...diffChannels(before.channels, after.channels)];
@@ -165,38 +334,29 @@ export function registerBackupTools(
     {
       title: "Plan Discord Backup Restore",
       description:
-        "Create a non-mutating restore plan that compares the live guild to a stored backup.",
+        "Create a non-mutating restore plan that compares the live guild to a stored backup and includes a stable planHash.",
       inputSchema: {
         backupId: backupIdInputSchema.describe("Backup snapshot to restore toward."),
         targetGuildId: discordSnowflakeSchema.describe("Live Discord guild ID to compare against the backup."),
       },
-      outputSchema: defaultToolOutputSchema,
+      outputSchema: restorePlanOutputSchema,
       annotations: readOnlyDiscordAnnotations,
     },
     async ({ backupId, targetGuildId }) => {
       try {
+        assertBackupDirInsideProject(config.projectRoot, config.backupDir);
         const desired = await readSnapshot(config.backupDir, backupId);
         const currentGuild = await discord.getGuild(targetGuildId);
         const current = await createSnapshot(currentGuild);
-        const operations = [
-          ...diffRoles(current.roles, desired.roles),
-          ...diffChannels(current.channels, desired.channels),
-        ];
-        const warnings = restoreWarnings(desired.guild.id, targetGuildId);
-        const plan: RestorePlan = {
-          schemaVersion,
-          sourceBackupId: backupId,
-          targetGuildId,
-          operations,
-          warnings,
-          idMap: {},
-        };
+        // Hash over the resolved guild ID so a non-canonical input cannot make
+        // the plan tool and restore apply disagree on an otherwise equal plan.
+        const plan = buildRestorePlan(backupId, currentGuild.id, desired, current);
         const safetyMessage =
-          "Review this plan before calling discord_backup_restore_apply. Apply is conservative and creates a pre-restore backup first.";
+          "Review this plan and its planHash before calling discord_backup_restore_apply with expectedPlanHash. Apply is conservative and creates a pre-restore backup first.";
 
         return successResponse(`Created restore plan from ${backupId} for guild ${targetGuildId}.`, {
           plan,
-          summary: operationSummary(operations),
+          summary: operationSummary(plan.operations),
           safetyMessage,
         });
       } catch (error) {
@@ -214,20 +374,35 @@ export function registerBackupTools(
     {
       title: "Apply Discord Backup Restore",
       description:
-        "Conservatively apply role/channel create/update operations from a backup. Creates a pre-restore backup first. Deletes require includeDeletes: true.",
+        "Conservatively apply role/channel create/update operations from a backup. Creates a pre-restore backup first, rejects an expectedPlanHash mismatch before mutating, and deletes require includeDeletes: true.",
       inputSchema: {
         backupId: backupIdInputSchema,
         targetGuildId: discordSnowflakeSchema,
+        expectedPlanHash: z.string().regex(/^[a-f0-9]{64}$/, "expected a sha256 hex digest").optional(),
         confirm: z.boolean().optional(),
         reason: auditReasonSchema,
         includeDeletes: z.boolean().optional(),
         allowCrossGuild: z.boolean().optional(),
       },
-      outputSchema: defaultToolOutputSchema,
+      outputSchema: restoreApplyOutputSchema,
       annotations: destructiveDiscordAnnotations,
     },
-    async (input) => {
+    withExclusiveMutation(async (input: {
+      backupId: string;
+      targetGuildId: string;
+      expectedPlanHash?: string;
+      confirm?: boolean;
+      reason?: string;
+      includeDeletes?: boolean;
+      allowCrossGuild?: boolean;
+    }) => {
+      let preRestoreBackupId: string | null = null;
+      let warnings: RestoreWarning[] = [];
+      let applied: unknown[] = [];
+      let skipped: unknown[] = [];
+
       try {
+        assertBackupDirInsideProject(config.projectRoot, config.backupDir);
         requireConfirmation(input);
         const desired = await readSnapshot(config.backupDir, input.backupId);
         if (desired.guild.id !== input.targetGuildId && input.allowCrossGuild !== true) {
@@ -237,58 +412,119 @@ export function registerBackupTools(
         }
 
         const guild = await discord.getGuild(input.targetGuildId);
-        const beforeApply = await createSnapshot(guild);
-        const preRestoreBackupId = await writeSnapshot(
+        const current = await createSnapshot(guild);
+        // Re-check after the Discord round trips: a junction created while the
+        // live snapshot was captured must not redirect the pre-restore backup.
+        assertBackupDirInsideProject(config.projectRoot, config.backupDir);
+        preRestoreBackupId = await writeSnapshot(
           config.backupDir,
-          beforeApply,
-          new Date(beforeApply.capturedAt),
+          current,
+          new Date(current.capturedAt),
         );
-        const operations = [
-          ...diffRoles(beforeApply.roles, desired.roles),
-          ...diffChannels(beforeApply.channels, desired.channels),
-        ];
-        const result = await applyRestoreOperations(guild, desired, operations, {
+        const plan = buildRestorePlan(input.backupId, guild.id, desired, current);
+        warnings = plan.warnings;
+
+        if (input.expectedPlanHash !== undefined && input.expectedPlanHash !== plan.planHash) {
+          return errorResponse("Restore plan hash mismatch; no Discord changes were applied.", {
+            preRestoreBackupId,
+            sourceBackupId: input.backupId,
+            targetGuildId: guild.id,
+            applied: [],
+            skipped: [],
+            failed: null,
+            warnings,
+            expectedPlanHash: input.expectedPlanHash,
+            actualPlanHash: plan.planHash,
+            error: `Restore plan drift detected: expected ${input.expectedPlanHash} but the freshly computed plan is ${plan.planHash}. Re-run discord_backup_restore_plan and review the new plan before applying.`,
+          });
+        }
+
+        const result = await applyRestoreOperations(guild, desired, plan.operations, {
           includeDeletes: input.includeDeletes === true,
-          reason: input.reason!,
+          reason: input.reason ?? "restore apply",
         });
+        applied = result.applied;
+        skipped = result.skipped;
 
         const restoreDetails = {
           preRestoreBackupId,
           sourceBackupId: input.backupId,
           targetGuildId: guild.id,
-          applied: result.applied,
-          skipped: result.skipped,
+          applied,
+          skipped,
           failed: result.failed ?? null,
-          warnings: [
-            ...(desired.warnings ?? []).map((warning) => ({
-              code: "SOURCE_BACKUP_WARNING",
-              ...warning,
-            })),
-            ...restoreWarnings(desired.guild.id, guild.id),
-            {
-              code: "LOSSY_RESTORE_LIMITS",
-              message:
-                "Discord cannot preserve recreated IDs, message history, invite codes, webhook tokens, or managed integration objects.",
-            },
-          ],
+          warnings,
         };
 
         if (result.failed) {
           return errorResponse("Restore stopped after an operation failed; partial progress is reported.", restoreDetails);
         }
 
-        return successResponse("Restore apply completed with conservative safeguards.", {
-          ...restoreDetails,
-        });
+        return successResponse("Restore apply completed with conservative safeguards.", restoreDetails);
       } catch (error) {
         return errorResponse("Failed to apply Discord restore.", {
-          backupId: input.backupId,
+          preRestoreBackupId,
+          sourceBackupId: input.backupId,
           targetGuildId: input.targetGuildId,
+          applied,
+          skipped,
+          failed: null,
+          warnings: warnings.length > 0
+            ? warnings
+            : [{
+                code: "NOT_RESTORED",
+                message: "Restore did not reach the apply stage; this call applied no Discord changes.",
+              }],
           error: safeErrorMessage(error),
         });
       }
-    },
+    }),
   );
+}
+
+interface RestorePlanContext {
+  sourceBackupId: string;
+  targetGuildId: string;
+  operations: RestoreOperation[];
+  warnings: RestoreWarning[];
+  idMap: IdMap;
+}
+
+function buildRestorePlan(
+  backupId: string,
+  targetGuildId: string,
+  desired: Snapshot,
+  current: Snapshot,
+): RestorePlan {
+  const operations = [
+    ...diffRoles(current.roles, desired.roles),
+    ...diffChannels(current.channels, desired.channels),
+  ];
+  const warnings = dedupeWarnings([
+    ...restoreWarnings(desired.guild.id, targetGuildId),
+    ...sourceBackupWarnings(desired),
+    ...notRestoredWarnings(desired),
+  ]);
+  const idMap = buildIdMap(desired, current);
+
+  const plan: RestorePlanContext = {
+    sourceBackupId: backupId,
+    targetGuildId,
+    operations,
+    warnings,
+    idMap,
+  };
+  const planHash = computeRestorePlanHash(plan);
+
+  return {
+    schemaVersion,
+    sourceBackupId: backupId,
+    targetGuildId,
+    operations,
+    warnings,
+    idMap,
+    planHash,
+  };
 }
 
 function restoreWarnings(sourceGuildId: string, targetGuildId: string): RestoreWarning[] {
@@ -311,6 +547,105 @@ function restoreWarnings(sourceGuildId: string, targetGuildId: string): RestoreW
   return warnings;
 }
 
+function sourceBackupWarnings(snapshot: Snapshot): RestoreWarning[] {
+  return (snapshot.warnings ?? []).map((warning) => ({
+    code: "SOURCE_BACKUP_WARNING",
+    message: `${warning.section}: ${warning.message}`,
+  }));
+}
+
+function notRestoredWarnings(snapshot: Snapshot): RestoreWarning[] {
+  const warnings: RestoreWarning[] = [
+    {
+      code: "NOT_RESTORED",
+      resource: "guild",
+      message: "Guild settings (name, icon, moderation levels, locale, AFK settings) were captured but are not applied by this conservative restore.",
+    },
+  ];
+
+  if (snapshot.autoModRules.length > 0) {
+    warnings.push({
+      code: "NOT_RESTORED",
+      message: `${snapshot.autoModRules.length} AutoMod rule(s) were captured but are not restored; recreate them with the AutoMod tools.`,
+    });
+  }
+  if (snapshot.scheduledEvents.length > 0) {
+    warnings.push({
+      code: "NOT_RESTORED",
+      message: `${snapshot.scheduledEvents.length} scheduled event(s) were captured but are not restored; recreate them manually.`,
+    });
+  }
+
+  const sections: Array<[string, number]> = [
+    ["webhook", snapshot.webhooks?.length ?? 0],
+    ["invite", snapshot.invites?.length ?? 0],
+    ["emoji", snapshot.emojis?.length ?? 0],
+    ["sticker", snapshot.stickers?.length ?? 0],
+    ["application command", snapshot.applicationCommands?.length ?? 0],
+  ];
+  for (const [section, count] of sections) {
+    if (count > 0) {
+      warnings.push({
+        code: "NOT_RESTORED",
+        message: `${count} ${section}(s) were captured but are not restored by this conservative restore.`,
+      });
+    }
+  }
+
+  const roleIcons = snapshot.roles.filter((role) => typeof role.icon === "string" && role.icon.length > 0).length;
+  if (roleIcons > 0) {
+    warnings.push({
+      code: "NOT_RESTORED",
+      resource: "role",
+      message: `${roleIcons} role icon(s) were captured, but Discord role icons cannot be recreated from a stored hash; set them manually.`,
+    });
+  }
+
+  return warnings;
+}
+
+function dedupeWarnings(warnings: RestoreWarning[]): RestoreWarning[] {
+  const seen = new Set<string>();
+  const deduped: RestoreWarning[] = [];
+
+  for (const warning of warnings) {
+    const key = `${warning.code}:${warning.message}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(warning);
+  }
+
+  return deduped;
+}
+
+function buildIdMap(desired: Snapshot, current: Snapshot): IdMap {
+  const idMap: IdMap = {};
+
+  for (const role of desired.roles) {
+    const exact = current.roles.find((candidate) => candidate.id === role.id);
+    const nameMatches = current.roles.filter((candidate) => candidate.name === role.name);
+    const match = exact ?? (nameMatches.length === 1 ? nameMatches[0] : undefined);
+    if (match) {
+      idMap[role.key] = match.id;
+    }
+  }
+
+  for (const channel of desired.channels) {
+    const exact = current.channels.find((candidate) => candidate.id === channel.id);
+    const nameMatches = current.channels.filter(
+      (candidate) => candidate.name === channel.name && candidate.type === channel.type,
+    );
+    const match = exact ?? (nameMatches.length === 1 ? nameMatches[0] : undefined);
+    if (match) {
+      idMap[channel.key] = match.id;
+    }
+  }
+
+  return idMap;
+}
+
 export async function applyRestoreOperations(
   guild: Guild,
   desired: Snapshot,
@@ -329,6 +664,8 @@ export async function applyRestoreOperations(
   const liveChannels = await guild.channels.fetch().then((channels) =>
     [...channels.values()].filter((channel) => channel !== null),
   );
+  const knownRoleIds = new Set(liveRoles.map((role) => role.id));
+  knownRoleIds.add(guild.id);
 
   for (const snapshot of desired.roles) {
     const exact = liveRoles.find((role) => role.id === snapshot.id);
@@ -364,6 +701,7 @@ export async function applyRestoreOperations(
     (result.applied ? applied : skipped).push(result.detail);
     if (result.key && result.id) {
       roleIdByKey.set(result.key, result.id);
+      knownRoleIds.add(result.id);
     }
   }
 
@@ -381,6 +719,7 @@ export async function applyRestoreOperations(
         operation,
         channelIdByKey,
         roleIdByKey,
+        knownRoleIds,
         desired.guild.id !== guild.id,
         options,
       );
@@ -433,30 +772,51 @@ async function applyRoleOperation(
     return { applied: false, detail: { ...operation, reason: "@everyone restore is skipped for safety" } };
   }
 
-  const roleOptions = {
+  const warnings: string[] = [];
+  const roleOptions: RoleEditOptions = {
     name: desiredRole.name,
-    color: desiredRole.color,
     hoist: desiredRole.hoist,
     mentionable: desiredRole.mentionable,
     permissions: new PermissionsBitField(BigInt(desiredRole.permissions)),
     position: desiredRole.position,
+    // A missing unicodeEmoji in a legacy backup is unknown, not "clear it".
+    ...(desiredRole.unicodeEmoji === undefined ? {} : { unicodeEmoji: desiredRole.unicodeEmoji }),
     reason: options.reason,
   };
 
+  if (desiredRole.colors) {
+    roleOptions.colors = {
+      primaryColor: desiredRole.colors.primary ?? 0,
+      secondaryColor: desiredRole.colors.secondary,
+      tertiaryColor: desiredRole.colors.tertiary,
+    };
+  } else {
+    // Legacy v1 snapshots only carry the deprecated single color field.
+    roleOptions.colors = { primaryColor: desiredRole.color };
+  }
+
+  if (typeof desiredRole.icon === "string" && desiredRole.icon.length > 0) {
+    warnings.push(
+      `Role icon ${desiredRole.icon} cannot be recreated from backup data (Discord stores only a hash); set it manually.`,
+    );
+  }
+
+  const detail = warnings.length === 0 ? operation : { ...operation, warnings };
+
   if (operation.type === "create" || !role) {
     if (desiredRole.managed) {
-      return { applied: false, detail: { ...operation, reason: "managed role cannot be recreated" } };
+      return { applied: false, detail: { ...detail, reason: "managed role cannot be recreated" } };
     }
-    const created = await guild.roles.create(roleOptions);
-    return { applied: true, detail: operation, key: desiredRole.key, id: created.id };
+    const created = await guild.roles.create(roleOptions as unknown as RoleCreateOptions);
+    return { applied: true, detail, key: desiredRole.key, id: created.id };
   }
 
   if (role.managed || !role.editable) {
-    return { applied: false, detail: { ...operation, reason: "role managed or not editable" } };
+    return { applied: false, detail: { ...detail, reason: "role managed or not editable" } };
   }
 
   const updated = await role.edit(roleOptions);
-  return { applied: true, detail: operation, key: desiredRole.key, id: updated.id };
+  return { applied: true, detail, key: desiredRole.key, id: updated.id };
 }
 
 async function applyChannelOperation(
@@ -464,6 +824,7 @@ async function applyChannelOperation(
   operation: RestoreOperation,
   channelIdByKey: Map<string, string>,
   roleIdByKey: Map<string, string>,
+  knownRoleIds: Set<string>,
   crossGuild: boolean,
   options: { includeDeletes: boolean; reason: string },
 ): Promise<{ applied: boolean; detail: unknown; key?: string; id?: string }> {
@@ -506,13 +867,15 @@ async function applyChannelOperation(
     };
   }
 
-  const restoredOverwrites = restorePermissionOverwrites(
+  const restoredOverwrites = await restorePermissionOverwrites(
+    guild,
     desiredChannel.permissionOverwrites,
     roleIdByKey,
+    knownRoleIds,
     crossGuild,
   );
   const preserveExistingOverwrites =
-    operation.type === "update" && restoredOverwrites.warnings.length > 0;
+    operation.type === "update" && restoredOverwrites.mappingBlocked;
 
   if (preserveExistingOverwrites) {
     restoredOverwrites.warnings.push(
@@ -527,6 +890,9 @@ async function applyChannelOperation(
     topic: desiredChannel.topic ?? undefined,
     nsfw: desiredChannel.nsfw,
     rateLimitPerUser: desiredChannel.rateLimitPerUser ?? undefined,
+    bitrate: desiredChannel.bitrate ?? undefined,
+    userLimit: desiredChannel.userLimit ?? undefined,
+    rtcRegion: desiredChannel.rtcRegion,
     permissionOverwrites: preserveExistingOverwrites ? undefined : restoredOverwrites.values,
     reason: options.reason,
   };
@@ -536,7 +902,9 @@ async function applyChannelOperation(
 
   if (operation.type === "create" || !channel) {
     channelOptions.type = desiredChannel.type as ChannelType;
-    const created = await guild.channels.create(channelOptions as unknown as Parameters<typeof guild.channels.create>[0]);
+    const created = await guild.channels.create(
+      channelOptions as unknown as GuildChannelCreateOptions,
+    );
     return { applied: true, detail, key: desiredChannel.key, id: created.id };
   }
 
@@ -559,14 +927,17 @@ async function applyChannelOperation(
   return { applied: true, detail, key: desiredChannel.key, id: updated.id };
 }
 
-function restorePermissionOverwrites(
+async function restorePermissionOverwrites(
+  guild: Guild,
   overwrites: PermissionOverwriteSnapshot[],
   roleIdByKey: Map<string, string>,
+  knownRoleIds: Set<string>,
   crossGuild: boolean,
-): {
+): Promise<{
   values: Array<{ id: string; type: OverwriteType; allow: PermissionsBitField; deny: PermissionsBitField }>;
   warnings: string[];
-} {
+  mappingBlocked: boolean;
+}> {
   const values: Array<{
     id: string;
     type: OverwriteType;
@@ -574,18 +945,40 @@ function restorePermissionOverwrites(
     deny: PermissionsBitField;
   }> = [];
   const warnings: string[] = [];
+  let mappingBlocked = false;
 
   for (const overwrite of overwrites) {
-    const mappedRoleId = overwrite.targetKey ? roleIdByKey.get(overwrite.targetKey) : undefined;
-    const targetId = overwrite.type === "role"
-      ? (mappedRoleId ?? (crossGuild ? undefined : overwrite.id))
-      : (crossGuild ? undefined : overwrite.id);
+    let targetId: string | undefined;
 
-    if (!targetId) {
-      warnings.push(
-        `Skipped ${overwrite.type} permission overwrite ${overwrite.id}: target cannot be mapped across guilds.`,
-      );
-      continue;
+    if (overwrite.type === "role") {
+      targetId = overwrite.targetKey ? roleIdByKey.get(overwrite.targetKey) : undefined;
+      if (!targetId && !crossGuild && knownRoleIds.has(overwrite.id)) {
+        targetId = overwrite.id;
+      }
+      if (!targetId) {
+        mappingBlocked = true;
+        warnings.push(
+          `Skipped role permission overwrite ${overwrite.id}: target role cannot be mapped in the target guild.`,
+        );
+        continue;
+      }
+    } else {
+      if (crossGuild) {
+        mappingBlocked = true;
+        warnings.push(
+          `Skipped member permission overwrite ${overwrite.id}: member overwrites cannot be mapped across guilds.`,
+        );
+        continue;
+      }
+
+      const member = await guild.members.fetch(overwrite.id).catch(() => null);
+      if (!member) {
+        warnings.push(
+          `Skipped member permission overwrite ${overwrite.id}: member is no longer in the target guild.`,
+        );
+        continue;
+      }
+      targetId = member.id;
     }
 
     values.push({
@@ -596,7 +989,7 @@ function restorePermissionOverwrites(
     });
   }
 
-  return { values, warnings };
+  return { values, warnings, mappingBlocked };
 }
 
 function asRoleSnapshot(value: unknown): RoleSnapshot {

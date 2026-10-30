@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { diffChannels, diffRoles } from "../backup/diff.js";
+import { computeRestorePlanHash } from "../backup/schema.js";
 import type { ChannelSnapshot, PermissionOverwriteSnapshot, RoleSnapshot } from "../backup/schema.js";
 
 function role(overrides: Partial<RoleSnapshot> = {}): RoleSnapshot {
@@ -139,5 +140,72 @@ describe("backup diff", () => {
     expect(diffChannels([currentChannel], [desiredChannel])).toEqual([
       { type: "skip", resource: "channel", key: currentChannel.key, reason: "no changes" },
     ]);
+  });
+
+  test("reports gradient role color and voice channel field changes", () => {
+    const beforeRole = role({ colors: { primary: 1, secondary: 2, tertiary: null } });
+    const afterRole = role({ colors: { primary: 1, secondary: 3, tertiary: null } });
+    const beforeChannel = channel({ bitrate: 64_000, userLimit: 5, rtcRegion: "us-west" });
+    const afterChannel = channel({ bitrate: 96_000, userLimit: 10, rtcRegion: null });
+
+    expect(diffRoles([beforeRole], [afterRole])).toEqual([
+      {
+        type: "update",
+        resource: "role",
+        key: beforeRole.key,
+        before: beforeRole,
+        after: afterRole,
+        changes: ["colors"],
+      },
+    ]);
+    expect(diffChannels([beforeChannel], [afterChannel])).toEqual([
+      {
+        type: "update",
+        resource: "channel",
+        key: beforeChannel.key,
+        before: beforeChannel,
+        after: afterChannel,
+        changes: ["bitrate", "userLimit", "rtcRegion"],
+      },
+    ]);
+  });
+
+  test("treats v1 snapshots without v2 fields as unknown instead of clearing live values", () => {
+    const v1Role = role();
+    const v2Role = role({ colors: { primary: 0, secondary: 7, tertiary: null } });
+    const v1Channel = channel();
+    const v2Channel = channel({ bitrate: 64_000, userLimit: 0, rtcRegion: "us-west" });
+
+    expect(diffRoles([v2Role], [v1Role])).toEqual([
+      { type: "skip", resource: "role", key: v2Role.key, reason: "no changes" },
+    ]);
+    expect(diffChannels([v2Channel], [v1Channel])).toEqual([
+      { type: "skip", resource: "channel", key: v2Channel.key, reason: "no changes" },
+    ]);
+  });
+
+  test("plan hash is canonical across key ordering and changes with operations", () => {
+    const operations = diffRoles(
+      [role({ key: "role:a", id: "1", name: "A" })],
+      [role({ key: "role:a", id: "1", name: "A", color: 10 })],
+    );
+    const base = {
+      sourceBackupId: "backup.json",
+      targetGuildId: "12345678901234567",
+      warnings: [{ code: "LOSSY_RESTORE_LIMITS", message: "lossy" }],
+    };
+
+    const first = computeRestorePlanHash({ ...base, operations });
+    const reordered = computeRestorePlanHash({
+      warnings: [{ message: "lossy", code: "LOSSY_RESTORE_LIMITS" }],
+      targetGuildId: "12345678901234567",
+      sourceBackupId: "backup.json",
+      operations: JSON.parse(JSON.stringify(operations)) as typeof operations,
+    });
+
+    expect(first).toMatch(/^[a-f0-9]{64}$/);
+    expect(reordered).toBe(first);
+    expect(computeRestorePlanHash({ ...base, operations: [] })).not.toBe(first);
+    expect(computeRestorePlanHash({ ...base, targetGuildId: "99999999999999999", operations })).not.toBe(first);
   });
 });

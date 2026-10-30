@@ -1,0 +1,57 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.TheStreamCode/discord-management-mcp",
+  "description": "Safe-by-default Discord management MCP with JSON backups, restore planning, and guarded mutations.",
+  "version": "0.2.0",
+  "repository": {
+    "url": "https://github.com/TheStreamCode/discord-management-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "discord-management-mcp",
+      "version": "0.2.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "DISCORD_TOKEN",
+          "description": "Discord bot token from Developer Portal > Bot > Token.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "BACKUP_DIR",
+          "description": "Relative directory for local JSON backups. It must stay inside the project directory.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "description": "Stderr log level: error, warn, info, or debug.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "ENABLE_MESSAGE_CONTENT",
+          "description": "Enables message-content tools and requires the Discord Message Content intent.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "boolean"
+        },
+        {
+          "name": "ENABLE_GUILD_MEMBERS",
+          "description": "Enables the Guild Members gateway intent.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "boolean"
+        }
+      ]
+    }
+  ]
+}

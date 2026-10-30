@@ -12,7 +12,11 @@ import type { Snapshot } from "../backup/schema.js";
 
 function snapshot(guildId: string): Snapshot {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    capturedAt: "2026-05-29T12:34:56.000Z",
+    coverage: {
+      channels: { fetched: 0, cacheSize: 0, hiddenKeys: [], complete: true },
+    },
     guild: {
       id: guildId,
       name: "Test Guild",
@@ -28,8 +32,7 @@ function snapshot(guildId: string): Snapshot {
     channels: [],
     autoModRules: [],
     scheduledEvents: [],
-    capturedAt: "2026-05-29T12:34:56.000Z",
-  };
+  } as Snapshot;
 }
 
 describe("requireConfirmation", () => {
@@ -71,6 +74,22 @@ describe("requireDestructiveBackup", () => {
       ).resolves.toBeUndefined();
     } finally {
       await rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  test("surfaces an actionable error when the backup directory is missing", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "discord-backups-"));
+
+    try {
+      await expect(
+        requireDestructiveBackupForGuild(
+          { backupId: "2026-05-29T12-34-56-000Z-123.json" },
+          join(parent, "missing"),
+          "guild-2",
+        ),
+      ).rejects.toThrow("Backup directory does not exist");
+    } finally {
+      await rm(parent, { recursive: true, force: true });
     }
   });
 });

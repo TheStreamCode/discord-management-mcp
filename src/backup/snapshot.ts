@@ -1,21 +1,86 @@
-import type { Guild } from "discord.js";
+import { ChannelFlags, type Guild } from "discord.js";
 import { safeErrorMessage } from "../errors.js";
-import { schemaVersion, type ChannelSnapshot, type JsonValue, type Snapshot, type SnapshotWarning } from "./schema.js";
+import {
+  schemaVersion,
+  type ChannelCoverage,
+  type ChannelSnapshot,
+  type JsonValue,
+  type RoleColorsSnapshot,
+  type Snapshot,
+  type SnapshotWarning,
+} from "./schema.js";
 import { isSecretKey } from "./sanitize.js";
 
 type AnyRecord = Record<string, unknown>;
 type CollectionLike<T> = Iterable<T> | { values(): IterableIterator<T> } | { map<R>(callback: (item: T) => R): R[] };
 
+const CHANNEL_OBFUSCATED_BIT = BigInt(ChannelFlags.ChannelObfuscated);
+const THREAD_CHANNEL_TYPES = new Set([10, 11, 12]);
+
+/**
+ * Threads appear in the gateway channel cache but are not regular channels:
+ * Discord cannot recreate them through the channel API, so they must never
+ * enter a backup snapshot or count as channel coverage.
+ */
+export function isThreadChannel(channel: unknown): boolean {
+  return (
+    Boolean(channel) &&
+    typeof channel === "object" &&
+    THREAD_CHANNEL_TYPES.has(Number((channel as { type?: unknown }).type))
+  );
+}
+
+export function filterThreadChannels<T>(channels: readonly T[]): T[] {
+  return channels.filter((channel) => !isThreadChannel(channel));
+}
+
 export async function createSnapshot(guild: Guild, capturedAt = new Date()): Promise<Snapshot> {
   const warnings: SnapshotWarning[] = [];
   const roles = await fetchRequiredCollection("roles", guild.roles?.fetch?.bind(guild.roles));
-  const channels = await fetchRequiredCollection("channels", guild.channels?.fetch?.bind(guild.channels));
+  const rawFetchedChannels = await fetchRequiredCollection("channels", guild.channels?.fetch?.bind(guild.channels));
+  const rawCachedChannels = toArray<AnyRecord>(
+    (guild.channels as { cache?: unknown } | undefined)?.cache,
+  );
+  const threadIds = new Set<string>();
+  for (const channel of [...rawFetchedChannels, ...rawCachedChannels]) {
+    if (isThreadChannel(channel)) {
+      threadIds.add(String(channel.id));
+    }
+  }
+  const fetchedChannels = filterThreadChannels(rawFetchedChannels);
+  const cachedChannels = filterThreadChannels(rawCachedChannels);
+  const { channels, coverage } = captureChannels(fetchedChannels, cachedChannels);
   const channelKeysById = buildChannelKeysById(channels);
   const roleKeysById = buildRoleKeysById(roles);
+
+  warnings.push({
+    section: "channels",
+    message:
+      "Channels the bot cannot view are not captured. Review coverage.channels before relying on this backup for channel restoration.",
+  });
+  if (threadIds.size > 0) {
+    warnings.push({
+      section: "channels",
+      message: `${threadIds.size} thread(s) were excluded from the channel snapshot; threads are not restored by backup restore.`,
+    });
+  }
+  if (coverage.cacheSize === 0) {
+    warnings.push({
+      section: "channels",
+      message: "Channel coverage could not be verified; channels the bot cannot view may be missing.",
+    });
+  }
+  if (coverage.hiddenKeys.length > 0) {
+    warnings.push({
+      section: "channels",
+      message: `${coverage.hiddenKeys.length} channel(s) are hidden from the bot (CHANNEL_OBFUSCATED) and were not captured.`,
+    });
+  }
 
   return {
     schemaVersion,
     capturedAt: capturedAt.toISOString(),
+    coverage: { channels: coverage },
     guild: {
       id: guild.id,
       name: guild.name,
@@ -33,6 +98,7 @@ export async function createSnapshot(guild: Guild, capturedAt = new Date()): Pro
       id: String(role.id),
       name: String(role.name),
       color: Number(role.color ?? 0),
+      colors: roleColors(role),
       hoist: Boolean(role.hoist),
       mentionable: Boolean(role.mentionable),
       permissions: bitfieldString(role.permissions),
@@ -105,6 +171,9 @@ function serializeChannel(
     topic: "topic" in channel ? valueOrNull(channel.topic) : undefined,
     nsfw: "nsfw" in channel ? Boolean(channel.nsfw) : undefined,
     rateLimitPerUser: "rateLimitPerUser" in channel ? nullableNumber(channel.rateLimitPerUser) : undefined,
+    bitrate: "bitrate" in channel ? nullableNumber(channel.bitrate) : undefined,
+    userLimit: "userLimit" in channel ? nullableNumber(channel.userLimit) : undefined,
+    rtcRegion: "rtcRegion" in channel ? valueOrNull(channel.rtcRegion) : undefined,
     permissionOverwrites: toArray((channel.permissionOverwrites as { cache?: unknown } | undefined)?.cache)
       .map((overwrite) => {
         const id = String(overwrite.id);
@@ -121,6 +190,117 @@ function serializeChannel(
       .sort((left, right) => `${left.type}:${left.id}`.localeCompare(`${right.type}:${right.id}`)),
   };
 }
+
+/**
+ * Merges the HTTP channel listing with the gateway cache.
+ *
+ * Discord omits channels the bot cannot view from the HTTP listing (2026-11)
+ * and marks them with CHANNEL_OBFUSCATED on the gateway. Merging by ID keeps
+ * the cache-only channels visible to coverage, while obfuscated ones are
+ * reported as hidden instead of being captured with partial metadata.
+ */
+function captureChannels(
+  fetchedChannels: AnyRecord[],
+  cachedChannels: AnyRecord[],
+): { channels: AnyRecord[]; coverage: ChannelCoverage } {
+  const channelsById = new Map<string, AnyRecord>();
+  const hiddenKeys = new Set<string>();
+
+  for (const channel of fetchedChannels) {
+    if (hasObfuscatedFlag(channel)) {
+      hiddenKeys.add(channelKey(channel));
+      continue;
+    }
+    channelsById.set(String(channel.id), channel);
+  }
+
+  for (const channel of cachedChannels) {
+    const id = String(channel.id);
+    if (hasObfuscatedFlag(channel)) {
+      hiddenKeys.add(channelKey(channel));
+      continue;
+    }
+    if (!channelsById.has(id)) {
+      channelsById.set(id, channel);
+    }
+  }
+
+  return {
+    channels: [...channelsById.values()],
+    coverage: summarizeChannelCoverage(fetchedChannels, cachedChannels),
+  };
+}
+
+/**
+ * Coverage summary shared by snapshot capture and read-only channel listings.
+ * `complete` is only claimed when the gateway cache proves no channel was
+ * omitted or obfuscated; an empty cache cannot verify anything.
+ */
+export function summarizeChannelCoverage(
+  fetchedChannels: readonly unknown[],
+  cachedChannels: readonly unknown[],
+): ChannelCoverage {
+  const fetched = filterThreadChannels(fetchedChannels);
+  const cached = filterThreadChannels(cachedChannels);
+  const hiddenKeys = new Set<string>();
+
+  for (const channel of [...cached, ...fetched]) {
+    if (isRecord(channel) && hasObfuscatedFlag(channel)) {
+      hiddenKeys.add(channelKey(channel));
+    }
+  }
+
+  return {
+    fetched: fetched.length,
+    cacheSize: cached.length,
+    hiddenKeys: [...hiddenKeys].sort(),
+    complete: cached.length > 0 &&
+      cached.length >= fetched.length &&
+      hiddenKeys.size === 0,
+  };
+}
+
+function isRecord(value: unknown): value is AnyRecord {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasObfuscatedFlag(channel: AnyRecord): boolean {
+  const flags: unknown = channel.flags;
+
+  if (typeof flags === "bigint") {
+    return (flags & CHANNEL_OBFUSCATED_BIT) !== 0n;
+  }
+
+  if (typeof flags === "number") {
+    return (flags & ChannelFlags.ChannelObfuscated) !== 0;
+  }
+
+  if (flags && typeof flags === "object") {
+    const bitfield = (flags as { bitfield?: unknown }).bitfield;
+    if (typeof bitfield === "bigint") {
+      return (bitfield & CHANNEL_OBFUSCATED_BIT) !== 0n;
+    }
+    if (typeof bitfield === "number") {
+      return (bitfield & ChannelFlags.ChannelObfuscated) !== 0;
+    }
+    if (typeof (flags as { has?: unknown }).has === "function") {
+      return (flags as { has(flag: number): boolean }).has(ChannelFlags.ChannelObfuscated);
+    }
+  }
+
+  return false;
+}
+
+function roleColors(role: AnyRecord): RoleColorsSnapshot {
+  const colors = role.colors as AnyRecord | undefined;
+
+  return {
+    primary: colors ? nullableNumber(colors.primaryColor) : nullableNumber(role.color),
+    secondary: colors ? nullableNumber(colors.secondaryColor) : null,
+    tertiary: colors ? nullableNumber(colors.tertiaryColor) : null,
+  };
+}
+
 
 function buildRoleKeysById(roles: AnyRecord[]): Map<string, string> {
   return new Map(roles.map((role) => [String(role.id), roleKey(role)]));

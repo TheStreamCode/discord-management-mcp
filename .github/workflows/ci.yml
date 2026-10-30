@@ -1,6 +1,6 @@
 name: CI
 
-on:
+"on":
   pull_request:
   push:
     branches:
@@ -44,6 +44,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Verify MCP surface
+        run: npm run verify:mcp
+
       - name: Verify npm package
         run: npm run pack:check
 
@@ -74,3 +77,12 @@ jobs:
 
       - name: Check
         run: npm run check
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify MCP surface
+        run: npm run verify:mcp
+
+      - name: Verify npm package
+        run: npm run pack:check

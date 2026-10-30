@@ -1,3 +1,4 @@
+import { assertBackupDirInsideProject } from "./config.js";
 import { readSnapshot, validateBackupId } from "./backup/store.js";
 
 export type ConfirmationInput = {
@@ -37,12 +38,14 @@ export async function requireDestructiveBackupForGuild(
   input: DestructiveBackupInput,
   backupDir: string,
   guildId: string,
+  projectRoot?: string,
 ): Promise<void> {
   if (input.allowWithoutBackup === true) {
     return;
   }
 
   requireDestructiveBackup(input);
+  assertBackupDirInsideProject(projectRoot, backupDir);
   const snapshot = await readSnapshot(backupDir, input.backupId!);
 
   if (snapshot.guild.id !== guildId) {

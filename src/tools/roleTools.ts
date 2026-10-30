@@ -3,18 +3,22 @@ import {
   PermissionFlagsBits,
   PermissionsBitField,
   type Role,
+  type RoleColorsEditResolvable,
+  type RoleColorsResolvable,
   type RoleResolvable,
 } from "discord.js";
 import { z } from "zod";
 import type { ServerConfig } from "../config.js";
 import type { DiscordClientManager } from "../discordClient.js";
 import { safeErrorMessage } from "../errors.js";
+import { withMutationQueue } from "../mutationQueue.js";
 import { errorResponse, successResponse } from "../responses.js";
 import { requireConfirmation, requireDestructiveBackupForGuild } from "../safety.js";
 import {
   additiveDiscordAnnotations,
   destructiveDiscordAnnotations,
   idempotentDiscordMutationAnnotations,
+  readOnlyDiscordAnnotations,
 } from "../toolAnnotations.js";
 import { defaultOutputToolRegistrar } from "../toolRegistration.js";
 import {
@@ -29,6 +33,66 @@ const confirmSchema = {
   confirm: z.boolean().optional(),
   reason: auditReasonSchema,
 };
+
+const roleColorsSchema = z.object({
+  primary: z.number().int().min(0).max(0xffffff),
+  secondary: z.number().int().min(0).max(0xffffff).nullable().optional(),
+  tertiary: z.number().int().min(0).max(0xffffff).nullable().optional(),
+}).strict();
+
+type RoleColorsInput = z.infer<typeof roleColorsSchema>;
+
+const guildIdSchema = {
+  guildId: discordSnowflakeSchema,
+};
+
+function assertSingleColorInput(input: { color?: number; colors?: RoleColorsInput }): void {
+  if (input.colors !== undefined && input.color !== undefined) {
+    throw new Error("Provide either color or colors, not both.");
+  }
+}
+
+function roleCreateColorOptions(input: {
+  color?: number;
+  colors?: RoleColorsInput;
+}): { color?: number; colors?: RoleColorsResolvable } {
+  assertSingleColorInput(input);
+
+  if (input.colors !== undefined) {
+    return {
+      colors: {
+        primaryColor: input.colors.primary,
+        ...(input.colors.secondary === undefined || input.colors.secondary === null
+          ? {}
+          : { secondaryColor: input.colors.secondary }),
+        ...(input.colors.tertiary === undefined || input.colors.tertiary === null
+          ? {}
+          : { tertiaryColor: input.colors.tertiary }),
+      },
+    };
+  }
+
+  return input.color === undefined ? {} : { colors: { primaryColor: input.color } };
+}
+
+function roleEditColorOptions(input: {
+  color?: number;
+  colors?: RoleColorsInput;
+}): { color?: number; colors?: RoleColorsEditResolvable } {
+  assertSingleColorInput(input);
+
+  if (input.colors !== undefined) {
+    return {
+      colors: {
+        primaryColor: input.colors.primary,
+        ...(input.colors.secondary === undefined ? {} : { secondaryColor: input.colors.secondary }),
+        ...(input.colors.tertiary === undefined ? {} : { tertiaryColor: input.colors.tertiary }),
+      },
+    };
+  }
+
+  return input.color === undefined ? {} : { colors: { primaryColor: input.color } };
+}
 
 const roleMutationResultSchema = {
   ok: z.boolean(),
@@ -100,17 +164,18 @@ export function registerRoleTools(
   discord: DiscordClientManager,
   config: ServerConfig,
 ): void {
-  const registerTool = defaultOutputToolRegistrar(server);
+  const registerTool = withMutationQueue(defaultOutputToolRegistrar(server));
 
   registerTool(
     "discord_create_role",
     {
       title: "Create Discord role",
-      description: "Create a Discord role.",
+      description: "Create a Discord role, optionally with primary/secondary/tertiary gradient colors.",
       inputSchema: {
         guildId: discordSnowflakeSchema,
         name: z.string().trim().min(1).max(100),
         color: z.number().int().min(0).max(0xffffff).optional(),
+        colors: roleColorsSchema.optional(),
         hoist: z.boolean().optional(),
         mentionable: z.boolean().optional(),
         permissions: z.array(z.string().min(1).max(100)).max(100).optional(),
@@ -127,7 +192,7 @@ export function registerRoleTools(
         const guild = await discord.getGuild(input.guildId);
         const role = await guild.roles.create({
           name: input.name,
-          color: input.color,
+          ...roleCreateColorOptions(input),
           hoist: input.hoist,
           mentionable: input.mentionable,
           permissions: parsePermissions(input.permissions),
@@ -156,12 +221,13 @@ export function registerRoleTools(
     "discord_update_role",
     {
       title: "Update Discord role",
-      description: "Update editable Discord role fields.",
+      description: "Update editable Discord role fields, including gradient colors.",
       inputSchema: {
         guildId: discordSnowflakeSchema,
         roleId: discordSnowflakeSchema,
         name: z.string().trim().min(1).max(100).optional(),
         color: z.number().int().min(0).max(0xffffff).optional(),
+        colors: roleColorsSchema.optional(),
         hoist: z.boolean().optional(),
         mentionable: z.boolean().optional(),
         permissions: z.array(z.string().min(1).max(100)).max(100).optional(),
@@ -173,12 +239,12 @@ export function registerRoleTools(
     async (input) => {
       try {
         requireConfirmation(input);
-        requireAtLeastOneInputField(input, ["name", "color", "hoist", "mentionable", "permissions"]);
+        requireAtLeastOneInputField(input, ["name", "color", "colors", "hoist", "mentionable", "permissions"]);
         validatePermissionNames(input.permissions);
         const role = await getEditableRole(discord, input.guildId, input.roleId);
         const updates = compactObject({
           name: input.name,
-          color: input.color,
+          ...roleEditColorOptions(input),
           hoist: input.hoist,
           mentionable: input.mentionable,
           permissions: parsePermissions(input.permissions),
@@ -195,6 +261,7 @@ export function registerRoleTools(
           updated: {
             name: input.name,
             color: input.color,
+            colors: input.colors ?? null,
             hoist: input.hoist,
             mentionable: input.mentionable,
             permissions: input.permissions,
@@ -230,7 +297,7 @@ export function registerRoleTools(
     async (input) => {
       try {
         requireConfirmation(input);
-        await requireDestructiveBackupForGuild(input, config.backupDir, input.guildId);
+        await requireDestructiveBackupForGuild(input, config.backupDir, input.guildId, config.projectRoot);
         const role = await getEditableRole(discord, input.guildId, input.roleId);
         const roleName = role.name;
         await role.delete(input.reason);
@@ -386,6 +453,38 @@ export function registerRoleTools(
           action: "discord_reorder_roles",
           guildId: input.guildId,
           positions: input.positions,
+          error: safeErrorMessage(error),
+        });
+      }
+    },
+  );
+
+  registerTool(
+    "discord_list_role_member_counts",
+    {
+      title: "List Discord role member counts",
+      description: "List how many guild members currently hold each role.",
+      inputSchema: guildIdSchema,
+      annotations: readOnlyDiscordAnnotations,
+    },
+    async ({ guildId }) => {
+      try {
+        const guild = await discord.getGuild(guildId);
+        const counts = await guild.roles.fetchMemberCounts();
+        const roles = [...counts.entries()]
+          .map(([roleId, memberCount]) => ({ roleId, memberCount }))
+          .sort((left, right) => right.memberCount - left.memberCount || left.roleId.localeCompare(right.roleId));
+        const totalRoleAssignments = roles.reduce((total, role) => total + role.memberCount, 0);
+
+        return successResponse(`Found member counts for ${roles.length} role(s).`, {
+          guildId,
+          count: roles.length,
+          totalRoleAssignments,
+          roles,
+        });
+      } catch (error) {
+        return errorResponse("Failed to list Discord role member counts.", {
+          guildId,
           error: safeErrorMessage(error),
         });
       }

@@ -2,7 +2,45 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## 0.2.0 - 2026-10-30
+
+### Added
+
+- Seven new tools: `discord_list_audit_log`, `discord_list_role_member_counts`, `discord_list_bans`, `discord_search_members`, `discord_set_incident_actions`, `discord_bulk_ban_members`, and `discord_set_voice_channel_status`, bringing the server to 54 tools.
+- Backup schema v2 with channel coverage metadata (`coverage.channels` containing `fetched`, `cacheSize`, `hiddenKeys`, and `complete`), role colors, channel `bitrate`, `userLimit`, and `rtcRegion` fields, and structured warnings.
+- Restore plans include a `planHash`. `discord_backup_restore_apply` accepts `expectedPlanHash` and rejects a plan that no longer matches the current guild state.
+- A FIFO mutation queue serializes mutating tool calls, and restore apply holds an exclusive slot.
+- Functional structured logging: `LOG_LEVEL` accepts `error`, `warn`, `info`, and `debug`, and writes JSON lines to stderr only.
+- MCP registry metadata: `package.json` declares `mcpName` and the repository ships `server.json`, both identifying `io.github.TheStreamCode/discord-management-mcp`.
+- Release and CI hardening: the `npm run verify:mcp` protocol smoke test runs on Linux and Windows, the Windows job builds and verifies the npm package, a weekly dependency audit workflow was added, and the publish workflow gates on audit, `pack:check`, main ancestry, and the `npm` environment.
+
+### Changed
+
+- Restore apply reports `NOT_RESTORED` warnings for captured sections that Discord cannot apply, and retains the pre-restore backup ID on every error path.
+- The backup guard now also covers `discord_set_channel_permissions` and `discord_update_guild_settings`. `discord_set_incident_actions` stays available without a backup for emergency response.
+- Channel listings and backups record hidden or obfuscated channels in the new coverage metadata instead of treating an incomplete snapshot as complete.
+- A new `docs/setup.md` walks through creating the Discord application and bot, inviting it with the right permissions and role hierarchy, copying the server ID, registering every supported MCP client, verifying the connection, running the first backup and restore, and the permissions required per tool family.
+- README, configuration, tool, safety, and design documentation were rewritten for 0.2.0, including supported MCP clients, the 54-tool catalog, the backup guard matrix, and the updated privileged-intent policy.
+- The documentation workflow now lints `docs/*.md` in addition to the top-level documents.
+- The `discord-api-types` override is now `^0.38.57`, so the server builds against current Discord API types.
+
+### Fixed
+
+- `LOG_LEVEL` now controls real logging. It was previously parsed as reserved metadata with no effect.
+- Backup writes are atomic: snapshots are written to a temporary file, synchronized, and renamed, so a crash cannot leave a valid-looking partial backup.
+- Backup directory resolution rejects symlinked or junctioned components and verifies the real path stays inside the project root; containment is re-validated before every read and write, so a junction created after startup cannot redirect a snapshot, and backup reads reject reparse points.
+- The Discord client resets and reconnects after a non-recoverable disconnect, attaches persistent error handlers, and shutdown drains in-flight mutations before exiting.
+- Threads found in the gateway channel cache are excluded from channel snapshots and coverage. Discord cannot recreate threads through the channel API, so backups no longer list them as restorable channels and report how many were skipped.
+- Channel mutations now check the discord.js `manageable` getter instead of the `editable` getter, which only exists on messages, roles, and threads in discord.js 14. Channel update, delete, permission overwrite, and voice status previously failed against real Discord even though mocked tests passed.
+- Role create, update, and restore pass gradient colors through the supported `colors` option instead of the deprecated single `color` field.
+- `discord_list_channel_messages` rejects conflicting pagination combinations instead of sending an ambiguous request.
+
+### Security
+
+- Atomic backup writes with restrictive file permissions reduce the risk of truncated or easily readable snapshots.
+- The backup guard matrix stays enforced: every mutating Discord tool requires `confirm: true` and a non-empty reason, and the listed high-impact operations require a same-guild backup or an explicit `allowWithoutBackup: true` acknowledgement.
+- Restore apply verifies `expectedPlanHash` when provided, so a plan that drifted from the current guild state cannot be applied silently.
+- Channel coverage warnings prevent an incomplete backup from being mistaken for a complete rollback point.
 
 ## 0.1.2 - 2026-08-08
 

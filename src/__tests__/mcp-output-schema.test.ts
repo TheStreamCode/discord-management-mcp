@@ -70,14 +70,44 @@ describe("MCP backup tool output schemas", () => {
       await client.connect(clientTransport);
       const { tools } = await client.listTools();
 
-      expect(tools).toHaveLength(47);
+      expect(tools).toHaveLength(54);
       for (const tool of tools) {
+        expect(tool.title, tool.name).toBeTruthy();
         expect(tool.outputSchema, tool.name).toMatchObject({
           type: "object",
           properties: { ok: { type: "boolean" } },
         });
         expect(tool.outputSchema.required, tool.name).toContain("ok");
       }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  test("reports a missing backup directory as an empty list, not an error", async () => {
+    const missingDir = join(tmpdir(), `discord-output-schema-missing-${process.pid}-${Date.now()}`);
+    const server = new McpServer({ name: "backup-list-test", version: "1.0.0" });
+    registerBackupTools(server, {} as DiscordClientManager, { backupDir: missingDir } as ServerConfig);
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client(
+      { name: "backup-list-test-client", version: "1.0.0" },
+      { capabilities: {} },
+    );
+
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({ name: "discord_backup_list", arguments: {} });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.structuredContent).toMatchObject({
+        ok: true,
+        backupIds: [],
+        count: 0,
+        backupDirectoryExists: false,
+      });
     } finally {
       await client.close();
       await server.close();
@@ -126,12 +156,57 @@ describe("MCP backup tool output schemas", () => {
         backupId,
         guildId: "12345678901234567",
         snapshotReturned: false,
+        coverage: {
+          channels: { fetched: 0, cacheSize: 0, hiddenKeys: [], complete: false },
+        },
       });
       expect(result.structuredContent).not.toHaveProperty("snapshot");
     } finally {
       await client.close();
       await server.close();
       await rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  test("validates dedicated backup output schemas on error paths", async () => {
+    const backupDir = join(tmpdir(), `discord-output-schema-errors-${process.pid}-${Date.now()}`);
+    const server = new McpServer({ name: "backup-error-schema-test", version: "1.0.0" });
+    const discord = {
+      getGuild: async () => {
+        throw new Error("Discord guild not found or inaccessible");
+      },
+    } as unknown as DiscordClientManager;
+    registerBackupTools(server, discord, { backupDir } as ServerConfig);
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client(
+      { name: "backup-error-schema-test-client", version: "1.0.0" },
+      { capabilities: {} },
+    );
+
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+
+      const created = await client.callTool({
+        name: "discord_backup_create",
+        arguments: { guildId: "12345678901234567" },
+      });
+      expect(created.isError).toBe(true);
+      expect(created.structuredContent).toMatchObject({ ok: false });
+
+      const planned = await client.callTool({
+        name: "discord_backup_restore_plan",
+        arguments: {
+          backupId: "2026-08-08T12-00-00-000Z-12345678901234567.json",
+          targetGuildId: "12345678901234567",
+        },
+      });
+      expect(planned.isError).toBe(true);
+      expect(planned.structuredContent).toMatchObject({ ok: false });
+    } finally {
+      await client.close();
+      await server.close();
     }
   });
 });

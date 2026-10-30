@@ -1,12 +1,13 @@
 import { ChannelType, type PermissionsBitField } from "discord.js";
 import { describe, expect, test, vi } from "vitest";
-import type { RestoreOperation, Snapshot } from "../backup/schema.js";
+import { emptySnapshotCoverage, type RestoreOperation, type Snapshot } from "../backup/schema.js";
 import { applyRestoreOperations } from "../tools/backupTools.js";
 
 function snapshot(overrides: Partial<Snapshot> = {}): Snapshot {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     capturedAt: "2026-05-29T12:34:56.000Z",
+    coverage: emptySnapshotCoverage(),
     guild: {
       id: "source-guild",
       name: "Source Guild",
@@ -22,6 +23,21 @@ function snapshot(overrides: Partial<Snapshot> = {}): Snapshot {
     channels: [],
     autoModRules: [],
     scheduledEvents: [],
+    ...overrides,
+  };
+}
+
+function desiredRole(overrides: Record<string, unknown> = {}) {
+  return {
+    key: "role:member:7:source",
+    id: "source-role",
+    name: "Member",
+    color: 0,
+    hoist: false,
+    mentionable: false,
+    permissions: "1024",
+    position: 7,
+    managed: false,
     ...overrides,
   };
 }
@@ -46,29 +62,19 @@ describe("restore apply", () => {
         fetch: vi.fn(async () => new Map()),
       },
     };
-    const desiredRole = {
-      key: "role:member:7:source",
-      id: "source-role",
-      name: "Member",
-      color: 0,
-      hoist: false,
-      mentionable: false,
-      permissions: "1024",
-      position: 7,
-      managed: false,
-    };
+    const desired = desiredRole();
     const operation: RestoreOperation = {
       type: "update",
       resource: "role",
       key: "role:member:1:target",
-      before: { ...desiredRole, key: "role:member:1:target", id: "target-role", position: 1 },
-      after: desiredRole,
+      before: { ...desired, key: "role:member:1:target", id: "target-role", position: 1 },
+      after: desired,
       changes: ["position"],
     };
 
     await applyRestoreOperations(
       guild as never,
-      snapshot({ roles: [desiredRole] }),
+      snapshot({ roles: [desired] }),
       [operation],
       { includeDeletes: false, reason: "restore test" },
     );
@@ -97,17 +103,7 @@ describe("restore apply", () => {
         create: vi.fn(),
       },
     };
-    const desiredRole = {
-      key: "role:member:1:source",
-      id: "source-role",
-      name: "Member",
-      color: 0,
-      hoist: false,
-      mentionable: false,
-      permissions: "1024",
-      position: 1,
-      managed: false,
-    };
+    const desired = desiredRole();
     const desiredChannel = {
       key: "channel:general:0:source",
       id: "source-channel",
@@ -121,7 +117,7 @@ describe("restore apply", () => {
       permissionOverwrites: [{
         id: "source-role",
         type: "role" as const,
-        targetKey: desiredRole.key,
+        targetKey: desired.key,
         allow: "1024",
         deny: "0",
       }],
@@ -137,7 +133,7 @@ describe("restore apply", () => {
 
     await applyRestoreOperations(
       guild as never,
-      snapshot({ roles: [desiredRole], channels: [desiredChannel] }),
+      snapshot({ roles: [desired], channels: [desiredChannel] }),
       [operation],
       { includeDeletes: false, reason: "restore test" },
     );
@@ -206,5 +202,125 @@ describe("restore apply", () => {
 
     expect(result.applied).toHaveLength(1);
     expect(result.failed).toMatchObject({ operation: operations[1], error: "Discord rejected role edit" });
+  });
+
+  test("applies gradient role colors and explicitly skips role icons", async () => {
+    const edit = vi.fn();
+    const liveRole = {
+      id: "target-role",
+      name: "Member",
+      managed: false,
+      editable: true,
+      edit,
+    };
+    edit.mockResolvedValue(liveRole);
+    const guild = {
+      id: "target-guild",
+      roles: {
+        fetch: vi.fn(async (id?: string) => id ? liveRole : new Map([[liveRole.id, liveRole]])),
+      },
+      channels: { fetch: vi.fn(async () => new Map()) },
+    };
+    const desired = desiredRole({
+      colors: { primary: 1, secondary: 2, tertiary: null },
+      icon: "icon-hash",
+      unicodeEmoji: "\u{1F525}",
+    });
+    const operation: RestoreOperation = {
+      type: "update",
+      resource: "role",
+      key: "role:member:1:target",
+      before: { ...desired, key: "role:member:1:target", id: "target-role" },
+      after: desired,
+      changes: ["colors"],
+    };
+
+    const result = await applyRestoreOperations(
+      guild as never,
+      snapshot({ roles: [desired] }),
+      [operation],
+      { includeDeletes: false, reason: "restore test" },
+    );
+
+    const options = edit.mock.calls[0]?.[0] as {
+      colors?: { primaryColor: number; secondaryColor: number | null; tertiaryColor: number | null };
+      color?: number;
+      unicodeEmoji?: string | null;
+      icon?: unknown;
+    };
+    expect(options.colors).toEqual({ primaryColor: 1, secondaryColor: 2, tertiaryColor: null });
+    expect(options.color).toBeUndefined();
+    expect(options.unicodeEmoji).toBe("\u{1F525}");
+    expect(options.icon).toBeUndefined();
+    expect(result.applied).toHaveLength(1);
+    expect(JSON.stringify(result.applied)).toContain("cannot be recreated from backup data");
+  });
+
+  test("skips stale member overwrites with a warning without aborting the channel update", async () => {
+    const channelEdit = vi.fn();
+    const liveRole = { id: "target-role", name: "Member" };
+    const liveChannel = {
+      id: "target-channel",
+      name: "general",
+      type: ChannelType.GuildVoice,
+      edit: channelEdit,
+    };
+    channelEdit.mockResolvedValue(liveChannel);
+    const guild = {
+      id: "source-guild",
+      roles: {
+        fetch: vi.fn(async () => new Map([[liveRole.id, liveRole]])),
+      },
+      members: {
+        fetch: vi.fn(async () => { throw new Error("Unknown Member"); }),
+      },
+      channels: {
+        fetch: vi.fn(async (id?: string) => id ? liveChannel : new Map([[liveChannel.id, liveChannel]])),
+      },
+    };
+    const desired = desiredRole();
+    const desiredChannel = {
+      key: "channel:general:0:source",
+      id: "source-channel",
+      name: "general",
+      type: ChannelType.GuildVoice,
+      parentKey: null,
+      position: 0,
+      bitrate: 64_000,
+      userLimit: 5,
+      rtcRegion: "eu-central",
+      permissionOverwrites: [
+        { id: "source-role", type: "role" as const, targetKey: desired.key, allow: "1024", deny: "0" },
+        { id: "11111111111111111", type: "member" as const, allow: "0", deny: "2048" },
+      ],
+    };
+    const operation: RestoreOperation = {
+      type: "update",
+      resource: "channel",
+      key: "channel:general:0:target",
+      before: { ...desiredChannel, key: "channel:general:0:target", id: "target-channel" },
+      after: desiredChannel,
+      changes: ["permissionOverwrites", "bitrate"],
+    };
+
+    const result = await applyRestoreOperations(
+      guild as never,
+      snapshot({ roles: [desired], channels: [desiredChannel] }),
+      [operation],
+      { includeDeletes: false, reason: "restore test" },
+    );
+
+    const options = channelEdit.mock.calls[0]?.[0] as {
+      bitrate?: number;
+      userLimit?: number;
+      rtcRegion?: string | null;
+      permissionOverwrites: Array<{ id: string; type: string }>;
+    };
+    expect(options.bitrate).toBe(64_000);
+    expect(options.userLimit).toBe(5);
+    expect(options.rtcRegion).toBe("eu-central");
+    expect(options.permissionOverwrites.map((overwrite) => overwrite.id)).toEqual(["target-role"]);
+    expect(result.applied).toHaveLength(1);
+    expect(JSON.stringify(result.applied)).toContain("member is no longer in the target guild");
   });
 });

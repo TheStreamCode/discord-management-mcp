@@ -19,7 +19,7 @@ name: Dependabot auto-merge
 # permissions — this workflow never checks out the PR, it only reads metadata and
 # calls the API.
 
-on: pull_request_target
+"on": pull_request_target
 
 permissions:
   contents: write

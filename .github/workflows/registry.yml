@@ -25,10 +25,10 @@ jobs:
         run: |
           set -euo pipefail
           base="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
-          curl -fsSL -o mcp-publisher.tar.gz "${base}/mcp-publisher_linux_amd64.tar.gz"
+          curl -fsSL -o mcp-publisher_linux_amd64.tar.gz "${base}/mcp-publisher_linux_amd64.tar.gz"
           curl -fsSL -o checksums.txt "${base}/registry_${MCP_PUBLISHER_VERSION#v}_checksums.txt"
           grep -E ' mcp-publisher_linux_amd64\.tar\.gz$' checksums.txt | sha256sum -c -
-          tar xzf mcp-publisher.tar.gz mcp-publisher
+          tar xzf mcp-publisher_linux_amd64.tar.gz mcp-publisher
 
       - name: Authenticate to MCP Registry
         run: ./mcp-publisher login github-oidc

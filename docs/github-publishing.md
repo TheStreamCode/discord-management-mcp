@@ -54,6 +54,24 @@ restricted in the package settings.
 A release is published with `npm publish --provenance`; no npm token exists in the workflow, so there
 is nothing to rotate and a stolen repository secret cannot publish the package.
 
+## MCP Registry
+
+The package metadata is also published to the official MCP Registry. The registry
+stores metadata only and validates the npm package before accepting an entry, so the
+npm release must exist first.
+
+- `server.json` declares the registry name `io.github.TheStreamCode/discord-management-mcp`,
+  which must equal `mcpName` in `package.json`, and the npm package with stdio transport.
+- `.github/workflows/registry.yml` publishes it on demand. It authenticates with GitHub
+  OIDC (`id-token: write`), so no registry token is stored in the repository.
+- Run it after every npm release: Actions > Publish to MCP Registry > Run workflow on
+  `main`. The workflow pins `mcp-publisher` and verifies its release checksum.
+- Verify the entry with:
+  `curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.TheStreamCode/discord-management-mcp"`.
+
+Local `mcp-publisher login github` is not used for releases; the OIDC path avoids storing
+a registry session on a workstation.
+
 ## GitHub Repository Settings
 
 Keep the following settings enabled:

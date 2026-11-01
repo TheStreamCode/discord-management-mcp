@@ -87,7 +87,8 @@
     "zod": "^4.4.3"
   },
   "overrides": {
-    "discord-api-types": "^0.38.57"
+    "discord-api-types": "^0.38.57",
+    "minimatch": "^11.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

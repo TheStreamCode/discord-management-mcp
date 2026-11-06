@@ -54,7 +54,7 @@ Every client needs the same command, arguments, and `DISCORD_TOKEN` environment 
 
 Claude Desktop, Cursor, Windsurf, and Cline accept the `mcpServers` JSON shape shown above. Clients that use a different configuration schema accept the same `command`, `args`, and `env` values. See each client's own documentation for the exact file or command.
 
-## Set up
+## Quick start
 
 The short version, with the full walkthrough in [setup and first use](docs/setup.md):
 
@@ -82,7 +82,7 @@ Then change things only through the guarded path: create a backup, review the ta
 
 High-impact operations also require a guild-matched `backupId` unless the operator explicitly accepts `allowWithoutBackup: true`. The [tool catalog](docs/tools.md) lists the exact policy for every mutating tool.
 
-## Why this one
+## Features
 
 Many Discord MCP servers stop at read-only inspection or previewing a change, and some route the bot token through a hosted service. Discord Management MCP executes changes locally, but only through a guard and recovery path:
 
@@ -103,7 +103,7 @@ What that means in practice:
 - **An explicit safety matrix.** Every Discord mutation needs `confirm: true` and a reason. The listed high-impact tools need a same-guild backup. Emergency incident actions stay available without one.
 - **Truthful recovery.** Restore reports skipped, lossy, applied, and failed operations instead of promising an impossible full rollback.
 
-## Backup to restore
+### Backup to restore
 
 The recovery path has three steps:
 
@@ -113,7 +113,7 @@ The recovery path has three steps:
 
 Discord cannot restore original IDs after delete and recreate, message or audit-log history, exact invite codes, webhook tokens, or every community and discovery setting. The server reports those limits instead of hiding them. See [safety and backups](docs/safety-and-backups.md) for the full model.
 
-## Tool coverage
+### Tool coverage
 
 The server registers 54 tools. See the [tool catalog](docs/tools.md) for every name and the [guard matrix](docs/tools.md#guard-matrix) for the backup policy.
 
@@ -128,17 +128,6 @@ The server registers 54 tools. See the [tool catalog](docs/tools.md) for every n
 | **Total** | **54** |
 
 Read-only tools are annotated as read-only and never require confirmation. Mutating Discord tools require `confirm: true` plus a non-empty audit reason, and mutations run through a shared queue so they cannot interleave. `discord_backup_create` only writes a local snapshot and does not require confirmation.
-
-## Safety model
-
-- Every Discord mutation requires `confirm: true` and a non-empty `reason`; the reason is passed to Discord where audit-log reasons are supported.
-- High-impact tools require a backup from the same guild, or an explicit `allowWithoutBackup: true` acknowledgement.
-- `discord_set_incident_actions` is intentionally exempt: it is used during raids, and its changes are reversible.
-- Restore apply creates its own pre-restore backup and retains its ID on every error path.
-- Backup writes are atomic, and backup paths are confined to the project directory with symlink and junction rejection.
-- Read-only tools are implemented and annotated as read-only.
-
-See [safety and backups](docs/safety-and-backups.md) for the guard matrix, channel coverage, and restore behavior, and [design and trust boundaries](docs/design.md) for the runtime model. Report vulnerabilities privately through `SECURITY.md`.
 
 ## Requirements
 
@@ -165,6 +154,17 @@ See the [configuration reference](docs/configuration.md) for token rules, loggin
 ## Privacy and security
 
 Everything runs locally over stdio: the bot token, backup files, restore plans, and the server process itself never leave the operator's machine. Mutations are guarded by explicit confirmation and by backups that are validated for size, depth, structure, symlinks, and guild identity before planning or restore. A restore creates a pre-restore backup before its first Discord mutation and stops truthfully on operation failure. See [design and trust boundaries](docs/design.md) and [safety and backups](docs/safety-and-backups.md) for the full model, and `SECURITY.md` for private vulnerability reporting.
+
+### Safety model
+
+- Every Discord mutation requires `confirm: true` and a non-empty `reason`; the reason is passed to Discord where audit-log reasons are supported.
+- High-impact tools require a backup from the same guild, or an explicit `allowWithoutBackup: true` acknowledgement.
+- `discord_set_incident_actions` is intentionally exempt: it is used during raids, and its changes are reversible.
+- Restore apply creates its own pre-restore backup and retains its ID on every error path.
+- Backup writes are atomic, and backup paths are confined to the project directory with symlink and junction rejection.
+- Read-only tools are implemented and annotated as read-only.
+
+See [safety and backups](docs/safety-and-backups.md) for the guard matrix, channel coverage, and restore behavior, and [design and trust boundaries](docs/design.md) for the runtime model. Report vulnerabilities privately through `SECURITY.md`.
 
 ## Troubleshooting
 
@@ -231,5 +231,4 @@ This independently developed project is not affiliated with, endorsed by, sponso
 ---
 
 Maintained by [Michael Gasperini (Mikesoft)](https://mikesoft.it).
-If this project helps you manage Discord communities safely, consider
-[sponsoring its maintenance](https://github.com/sponsors/TheStreamCode).
+If this project is useful to you, consider [sponsoring its maintenance](https://github.com/sponsors/TheStreamCode).

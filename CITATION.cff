@@ -6,6 +6,6 @@ authors:
     given-names: Michael
 url: "https://github.com/TheStreamCode/discord-management-mcp"
 repository-code: "https://github.com/TheStreamCode/discord-management-mcp"
-version: "0.2.0"
-date-released: "2026-10-30"
+version: "0.2.1"
+date-released: "2026-11-12"
 license: MIT

@@ -1,7 +1,7 @@
 {
   "name": "discord-management-mcp",
   "mcpName": "io.github.TheStreamCode/discord-management-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "Safe-by-default Discord management MCP server with JSON backups, restore planning, and guarded mutations.",
   "license": "MIT",

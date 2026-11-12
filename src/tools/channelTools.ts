@@ -1,9 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   ChannelType,
+  OverwriteType,
   PermissionFlagsBits,
   PermissionsBitField,
   type GuildChannelEditOptions,
+  type PermissionOverwriteOptions,
 } from "discord.js";
 import { z } from "zod";
 import type { ServerConfig } from "../config.js";
@@ -68,11 +70,15 @@ type EditableGuildChannel = {
   edit(options: GuildChannelEditOptions): Promise<EditableGuildChannel>;
   delete(reason?: string): Promise<unknown>;
   permissionOverwrites: {
-    edit(
+    create(
       target: string,
-      options: { allow: PermissionsBitField; deny: PermissionsBitField },
-      reason?: string,
+      options: PermissionOverwriteOptions,
+      overwriteOptions?: { reason?: string; type?: OverwriteType },
     ): Promise<unknown>;
+    fetch(
+      target: string,
+      options?: { force?: boolean },
+    ): Promise<{ allow: PermissionsBitField; deny: PermissionsBitField }>;
   };
 };
 
@@ -88,6 +94,22 @@ function validatePermissionNames(permissionNames: string[]): void {
   const invalid = permissionNames.filter((name) => !isPermissionName(name));
   if (invalid.length > 0) {
     throw new Error(`Invalid Discord permission name(s): ${invalid.join(", ")}`);
+  }
+}
+
+function toOverwriteOptions(allow: string[], deny: string[]): PermissionOverwriteOptions {
+  // Callers validate the names first; the narrow key cast keeps the map typed.
+  const options: PermissionOverwriteOptions = {};
+  for (const name of allow) options[name as keyof typeof PermissionFlagsBits] = true;
+  for (const name of deny) options[name as keyof typeof PermissionFlagsBits] = false;
+  return options;
+}
+
+function assertNoConflictingPermissions(allow: string[], deny: string[]): void {
+  const denied = new Set(deny);
+  const conflicting = allow.filter((name) => denied.has(name));
+  if (conflicting.length > 0) {
+    throw new Error(`Permission(s) cannot be both allowed and denied: ${conflicting.join(", ")}`);
   }
 }
 
@@ -328,6 +350,7 @@ export function registerChannelTools(
       try {
         requireConfirmation(input);
         validatePermissionNames([...input.allow, ...input.deny]);
+        assertNoConflictingPermissions(input.allow, input.deny);
         const channel = await getEditableChannel(discord, input.channelId);
         await requireDestructiveBackupForGuild(input, config.backupDir, channel.guildId, config.projectRoot);
         const guild = await discord.getGuild(channel.guildId);
@@ -342,14 +365,30 @@ export function registerChannelTools(
           });
         }
 
-        await channel.permissionOverwrites.edit(
+        const requestedAllow = parsePermissions(input.allow).bitfield;
+        const requestedDeny = parsePermissions(input.deny).bitfield;
+
+        // `permissionOverwrites.edit()` merges the cached overwrite and
+        // `resolveOverwriteOptions` only applies `true`/`false`/`null` values, so
+        // PermissionsBitField allow/deny payloads were silently dropped. `create()`
+        // replaces the overwrite and accepts an explicit boolean map.
+        await channel.permissionOverwrites.create(
           input.targetId,
+          toOverwriteOptions(input.allow, input.deny),
           {
-            allow: parsePermissions(input.allow),
-            deny: parsePermissions(input.deny),
+            reason: input.reason,
+            type: input.targetType === "role" ? OverwriteType.Role : OverwriteType.Member,
           },
-          input.reason,
         );
+
+        // The PUT does not refresh the cache, so a forced fetch is the only way to
+        // report success truthfully instead of echoing the requested values.
+        const applied = await channel.permissionOverwrites.fetch(input.targetId, { force: true });
+        if (applied.allow.bitfield !== requestedAllow || applied.deny.bitfield !== requestedDeny) {
+          throw new Error(
+            `Discord did not apply the requested permission overwrite for ${input.targetType} ${input.targetId} in channel ${channel.id}: expected allow=${requestedAllow} deny=${requestedDeny}, applied allow=${applied.allow.bitfield} deny=${applied.deny.bitfield}.`,
+          );
+        }
 
         return successResponse("Channel permissions updated.", {
           ok: true,

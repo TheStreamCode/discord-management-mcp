@@ -5,7 +5,9 @@ import {
   AuditLogEvent,
   ChannelType,
   PermissionFlagsBits,
+  PermissionOverwrites,
   PermissionsBitField,
+  type PermissionOverwriteOptions,
 } from "discord.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -107,6 +109,53 @@ function auditGuild(overrides: Record<string, unknown> = {}) {
     },
     fetchAuditLogs: vi.fn(async () => ({ entries: new Map([[entry.id, entry]]) })),
     ...overrides,
+  };
+}
+
+// Mirrors discord.js' PermissionOverwriteManager: `create` replaces the overwrite from
+// scratch, while `edit` merges the cached bits and only understands boolean/null values.
+function fakeOverwriteManager(initial: { allow: bigint; deny: bigint } = { allow: 0n, deny: 0n }) {
+  let stored = { ...initial };
+
+  const create = vi.fn(async (_target: string, options: PermissionOverwriteOptions) => {
+    const { allow, deny } = PermissionOverwrites.resolveOverwriteOptions(options);
+    stored = { allow: allow.bitfield, deny: deny.bitfield };
+  });
+  const edit = vi.fn(async (_target: string, options: PermissionOverwriteOptions) => {
+    const { allow, deny } = PermissionOverwrites.resolveOverwriteOptions(options, {
+      allow: new PermissionsBitField(stored.allow),
+      deny: new PermissionsBitField(stored.deny),
+    });
+    stored = { allow: allow.bitfield, deny: deny.bitfield };
+  });
+  const fetch = vi.fn(async () => ({
+    allow: new PermissionsBitField(stored.allow),
+    deny: new PermissionsBitField(stored.deny),
+  }));
+
+  return { create, edit, fetch, stored: () => ({ ...stored }) };
+}
+
+function permissionChannel(overwrites: ReturnType<typeof fakeOverwriteManager>) {
+  return {
+    id: CHANNEL_ID,
+    guildId: GUILD_ID,
+    name: "General",
+    type: ChannelType.GuildText,
+    manageable: true,
+    edit: vi.fn(),
+    permissionOverwrites: overwrites,
+  };
+}
+
+function permissionDiscord(channel: ReturnType<typeof permissionChannel>) {
+  return {
+    getGuild: async () => ({
+      id: GUILD_ID,
+      roles: { fetch: async () => ({ id: USER_ID, name: "Role" }) },
+      members: { fetch: async () => ({ id: USER_ID }) },
+    }),
+    getClient: async () => ({ channels: { fetch: async () => channel } }),
   };
 }
 
@@ -465,6 +514,7 @@ describe("new drift tools", () => {
   });
 
   test("backup guard policy covers set_channel_permissions and update_guild_settings", async () => {
+    const overwrites = fakeOverwriteManager();
     const channel = {
       id: CHANNEL_ID,
       guildId: GUILD_ID,
@@ -472,7 +522,7 @@ describe("new drift tools", () => {
       type: ChannelType.GuildText,
       manageable: true,
       edit: vi.fn(),
-      permissionOverwrites: { edit: vi.fn(async () => undefined) },
+      permissionOverwrites: overwrites,
     };
     const guild = {
       id: GUILD_ID,
@@ -524,7 +574,7 @@ describe("new drift tools", () => {
         },
       });
       expect(allowed.isError).toBeUndefined();
-      expect(channel.permissionOverwrites.edit).toHaveBeenCalledOnce();
+      expect(overwrites.create).toHaveBeenCalledOnce();
     });
 
     await withTool(registerServerConfigTools, discord, async (client) => {
@@ -546,6 +596,120 @@ describe("new drift tools", () => {
       });
       expect(allowed.isError).toBeUndefined();
       expect(guild.edit).toHaveBeenCalledOnce();
+    });
+  });
+
+  test("discord_set_channel_permissions replaces the overwrite instead of merging stale bits", async () => {
+    const overwrites = fakeOverwriteManager({
+      allow: PermissionFlagsBits.ManageChannels | PermissionFlagsBits.ManageMessages,
+      deny: 0n,
+    });
+    const channel = permissionChannel(overwrites);
+
+    await withTool(registerChannelTools, permissionDiscord(channel), async (client) => {
+      const result = await client.callTool({
+        name: "discord_set_channel_permissions",
+        arguments: {
+          channelId: CHANNEL_ID,
+          targetId: USER_ID,
+          targetType: "role",
+          allow: ["ViewChannel", "ReadMessageHistory"],
+          deny: ["SendMessages"],
+          allowWithoutBackup: true,
+          confirm: true,
+          reason: "permissions regression",
+        },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(overwrites.create).toHaveBeenCalledOnce();
+      expect(overwrites.edit).not.toHaveBeenCalled();
+      expect(overwrites.stored()).toEqual({
+        allow: PermissionFlagsBits.ViewChannel | PermissionFlagsBits.ReadMessageHistory,
+        deny: PermissionFlagsBits.SendMessages,
+      });
+      expect(result.structuredContent).toMatchObject({
+        ok: true,
+        updated: { allow: ["ViewChannel", "ReadMessageHistory"], deny: ["SendMessages"] },
+      });
+    });
+  });
+
+  test("discord_set_channel_permissions applies allow bits when no overwrite existed", async () => {
+    const overwrites = fakeOverwriteManager();
+    const channel = permissionChannel(overwrites);
+
+    await withTool(registerChannelTools, permissionDiscord(channel), async (client) => {
+      const result = await client.callTool({
+        name: "discord_set_channel_permissions",
+        arguments: {
+          channelId: CHANNEL_ID,
+          targetId: USER_ID,
+          targetType: "role",
+          allow: ["ViewChannel", "ReadMessageHistory"],
+          deny: [],
+          allowWithoutBackup: true,
+          confirm: true,
+          reason: "permissions regression",
+        },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(overwrites.stored()).toEqual({
+        allow: PermissionFlagsBits.ViewChannel | PermissionFlagsBits.ReadMessageHistory,
+        deny: 0n,
+      });
+    });
+  });
+
+  test("discord_set_channel_permissions fails when Discord keeps the previous overwrite", async () => {
+    const overwrites = fakeOverwriteManager();
+    overwrites.create.mockImplementation(async () => undefined);
+    const channel = permissionChannel(overwrites);
+
+    await withTool(registerChannelTools, permissionDiscord(channel), async (client) => {
+      const result = await client.callTool({
+        name: "discord_set_channel_permissions",
+        arguments: {
+          channelId: CHANNEL_ID,
+          targetId: USER_ID,
+          targetType: "role",
+          allow: ["ViewChannel"],
+          deny: [],
+          allowWithoutBackup: true,
+          confirm: true,
+          reason: "permissions regression",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(String(result.structuredContent?.error)).toContain("did not apply");
+      expect(String(result.structuredContent?.error)).toContain(USER_ID);
+    });
+  });
+
+  test("discord_set_channel_permissions rejects a permission listed as both allowed and denied", async () => {
+    const overwrites = fakeOverwriteManager();
+    const channel = permissionChannel(overwrites);
+
+    await withTool(registerChannelTools, permissionDiscord(channel), async (client) => {
+      const result = await client.callTool({
+        name: "discord_set_channel_permissions",
+        arguments: {
+          channelId: CHANNEL_ID,
+          targetId: USER_ID,
+          targetType: "role",
+          allow: ["ViewChannel"],
+          deny: ["ViewChannel"],
+          allowWithoutBackup: true,
+          confirm: true,
+          reason: "permissions regression",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(String(result.structuredContent?.error)).toContain("both allowed and denied");
+      expect(overwrites.create).not.toHaveBeenCalled();
     });
   });
 

@@ -11,6 +11,14 @@ All notable changes to this project are documented in this file.
   `io.github.TheStreamCode/discord-management-mcp` is now maintained from CI without stored
   credentials.
 
+### Fixed
+
+- `discord_set_channel_permissions` now applies the requested allow/deny overwrite instead of
+  silently keeping the previous bits. It replaces the overwrite with `permissionOverwrites.create`
+  (discord.js `edit` ignored `PermissionsBitField` payloads), rejects a permission listed as both
+  allowed and denied, and reads the applied overwrite back so it cannot report success when
+  Discord did not apply the change.
+
 ## 0.2.0 - 2026-10-30
 
 ### Added
